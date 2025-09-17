@@ -4,6 +4,8 @@
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>
 #include <MQ135.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
 
 // Define pins
 #define RELAY_PIN 13
@@ -14,8 +16,13 @@
 #define OLED_SCL 22
 
 // WiFi credentials
-const char* ssid = "Your_SSID";
-const char* password = "Your_PASSWORD";
+const char* ssid = "Duke1";
+const char* password = "estaunbuendia";
+
+// Backend configuration
+const char* backendBaseURL = "https://www.airpurifier.electronicsideas.com";
+const char* backendUsername = "esp32";
+const char* backendPassword = "$2a$12$UlCtTwv1HhSzxDNVvuwR8.up.yAcODczYmsq0WnTkAhGbWqtomLou"; // Change this to match your backend
 
 // Sensor & System variables
 MQ135 mq135_sensor(MQ135_PIN);
@@ -25,6 +32,14 @@ String autoMode = "ON"; // Default to automatic control
 bool wifiConnected = false;
 int connectionAttempts = 0;
 const int maxConnectionAttempts = 10;
+int autoThreshold = 300; // Default threshold
+
+// JWT Authentication variables
+String jwtToken = "";
+unsigned long tokenExpiry = 0;
+bool isAuthenticated = false;
+unsigned long lastDataSendTime = 0;
+const unsigned long dataSendInterval = 300000; // 5 minutes
 
 // OLED Display object
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -77,6 +92,158 @@ void displayProgressBar(int progress, int total, String label = "") {
   display.display();
 }
 
+// Function to authenticate with the backend
+bool authenticateBackend() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot authenticate: WiFi not connected");
+    return false;
+  }
+
+  // Check if we have a valid token
+  if (jwtToken != "" && tokenExpiry > millis()) {
+    Serial.println("Using existing valid token");
+    return true;
+  }
+
+  // If token is expired or doesn't exist, try to login
+  WiFiClient client;
+  HTTPClient http;
+
+  String serverPath = String(backendBaseURL) + "/api/auth/login";
+  
+  http.begin(client, serverPath);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("User-Agent", "ESP32-AirPurifier/1.0");
+  
+  // Create login credentials
+  String loginData = "{\"username\":\"" + String(backendUsername) + "\",\"password\":\"" + String(backendPassword) + "\"}";
+  
+  Serial.println("Attempting authentication with backend...");
+  int httpResponseCode = http.POST(loginData);
+  
+  if (httpResponseCode == 200) {
+    String payload = http.getString();
+    Serial.println("Authentication successful");
+    
+    // Parse JSON response
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (error) {
+      Serial.print("JSON parsing failed: ");
+      Serial.println(error.c_str());
+      http.end();
+      return false;
+    }
+    
+    jwtToken = doc["token"].as<String>();
+    String expiresIn = doc["expiresIn"].as<String>();
+    
+    // Calculate expiry time (assuming 24h)
+    tokenExpiry = millis() + 86400000; // 24 hours in milliseconds
+    
+    isAuthenticated = true;
+    Serial.println("JWT token received and stored");
+    http.end();
+    return true;
+  } else {
+    Serial.print("Authentication failed, error code: ");
+    Serial.println(httpResponseCode);
+    if (httpResponseCode > 0) {
+      String payload = http.getString();
+      Serial.print("Response: ");
+      Serial.println(payload);
+    }
+    http.end();
+    return false;
+  }
+}
+
+// Function to send data to backend with authentication
+void sendDataToBackend(float airQuality, bool fanState, bool autoMode) {
+  if (!authenticateBackend()) {
+    Serial.println("Failed to authenticate with backend, skipping data send");
+    return;
+  }
+
+  WiFiClient client;
+  HTTPClient http;
+
+  String serverPath = String(backendBaseURL) + "/api/readings";
+  
+  http.begin(client, serverPath);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + jwtToken);
+  http.addHeader("User-Agent", "ESP32-AirPurifier/1.0");
+  
+  // Create JSON data
+  String postData = "{\"device_id\":\"esp32_air_purifier_01\",";
+  postData += "\"air_quality\":" + String(airQuality) + ",";
+  postData += "\"fan_state\":" + String(fanState ? "true" : "false") + ",";
+  postData += "\"auto_mode\":" + String(autoMode ? "true" : "false") + "}";
+  
+  Serial.println("Sending data to backend: " + postData);
+  int httpResponseCode = http.POST(postData);
+  
+  if (httpResponseCode == 201) {
+    Serial.println("Data sent to backend successfully");
+  } else {
+    Serial.print("Error sending data. Code: ");
+    Serial.println(httpResponseCode);
+    if (httpResponseCode > 0) {
+      String payload = http.getString();
+      Serial.print("Response: ");
+      Serial.println(payload);
+    }
+    // If unauthorized, reset token to force reauthentication
+    if (httpResponseCode == 401) {
+      jwtToken = "";
+      isAuthenticated = false;
+      Serial.println("Token invalid, reset for reauthentication");
+    }
+  }
+  
+  http.end();
+}
+
+// Function to get settings from backend
+void getSettingsFromBackend() {
+  if (!authenticateBackend()) {
+    Serial.println("Failed to authenticate, cannot get settings");
+    return;
+  }
+
+  WiFiClient client;
+  HTTPClient http;
+
+  String serverPath = String(backendBaseURL) + "/api/settings?device_id=esp32_air_purifier_01";
+  
+  http.begin(client, serverPath);
+  http.addHeader("Authorization", "Bearer " + jwtToken);
+  http.addHeader("User-Agent", "ESP32-AirPurifier/1.0");
+  
+  int httpResponseCode = http.GET();
+  
+  if (httpResponseCode == 200) {
+    String payload = http.getString();
+    Serial.println("Settings received: " + payload);
+    
+    // Parse JSON response
+    DynamicJsonDocument doc(256);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (!error && doc.containsKey("threshold")) {
+      autoThreshold = doc["threshold"];
+      Serial.println("Updated threshold to: " + String(autoThreshold));
+    }
+  } else {
+    Serial.print("Error getting settings. Code: ");
+    Serial.println(httpResponseCode);
+  }
+  
+  http.end();
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -114,7 +281,18 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
     displayText("WiFi Connected!\nIP: " + WiFi.localIP().toString(), 1, 0, 0);
-    Serial.println(WiFi.localIP()); // Print the IP address
+    Serial.println("WiFi Connected. IP: " + WiFi.localIP().toString());
+    delay(2000);
+    
+    // Try to authenticate with backend
+    displayText("Auth with\nbackend...", 1, 0, 0);
+    if (authenticateBackend()) {
+      displayText("Backend auth\nsuccessful!", 1, 0, 0);
+      // Get initial settings from backend
+      getSettingsFromBackend();
+    } else {
+      displayText("Backend auth\nfailed!", 1, 0, 0);
+    }
     delay(2000);
   }
 
@@ -428,10 +606,116 @@ void setup() {
                 font-size: 2rem;
             }
         }
+
+
+        /*Admin Styles*/
+         .login-container {
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 20px;
+            background: var(--card-bg);
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+        
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .form-group label {
+            font-weight: bold;
+        }
+        
+        .form-group input {
+            padding: 10px;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 50px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: var(--button-text);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: var(--button-text);
+        }
+        
+        .user-menu {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+        }
+        
+        .admin-panel {
+            margin-top: 30px;
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 15px;
+        }
+        
+        .user-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        .user-table th, .user-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 
 <body>
+  <div id="login-page" class="login-container">
+        <h1><i class="fas fa-wind"></i> Air Purifier Login</h1>
+        <form id="login-form" class="login-form">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Login</button>
+        </form>
+        <div id="login-message" style="margin-top: 15px; color: var(--danger);"></div>
+    </div>
+
+    <div id="app-content" class="hidden">
+        <div class="user-menu">
+            <span id="user-greeting">Welcome, </span>
+            <button id="logout-btn" class="btn btn-danger">Logout</button>
+        </div>
     <header>
         <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
         <p>Monitor and control your air purification system</p>
@@ -493,8 +777,12 @@ void setup() {
             <div class="control-card">
                 <div class="control-title">Settings</div>
                 <div class="slider-container">
-                    <label for="threshold">Auto Threshold: <span id="threshold-value">300</span> PPM</label>
-                    <input type="range" min="100" max="1000" value="300" class="slider" id="threshold"
+                    <label for="threshold">Auto Threshold: <span id="threshold-value">)=====";
+                    html += String(autoThreshold);
+                    html += R"=====(</span> PPM</label>
+                    <input type="range" min="100" max="1000" value=")=====";
+                    html += String(autoThreshold);
+                    html += R"=====(" class="slider" id="threshold"
                         onchange="updateThreshold(this.value)">
                 </div>
             </div>
@@ -506,11 +794,167 @@ void setup() {
         </div>
     </div>
 
+     <!-- Admin Panel (only visible to admins) -->
+            <div id="admin-panel" class="admin-panel hidden">
+                <h3><i class="fas fa-users-cog"></i> User Management</h3>
+                <button id="add-user-btn" class="btn btn-primary">Add User</button>
+                
+                <table class="user-table">
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>Admin</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-table-body">
+                        <!-- Users will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
     <footer>
         <p>Air Purifier System | © 2025</p>
     </footer>
 
     <script>
+        let authToken = localStorage.getItem('authToken');
+        let currentUser = null;
+        
+        // Check authentication on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            if (authToken) {
+                verifyToken();
+            } else {
+                showLoginPage();
+            }
+            
+            // Login form handler
+            document.getElementById('login-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                login();
+            });
+            
+            // Logout button handler
+            document.getElementById('logout-btn').addEventListener('click', logout);
+        });
+        
+        function showLoginPage() {
+            document.getElementById('login-page').classList.remove('hidden');
+            document.getElementById('app-content').classList.add('hidden');
+        }
+        
+        function showAppContent() {
+            document.getElementById('login-page').classList.add('hidden');
+            document.getElementById('app-content').classList.remove('hidden');
+        }
+        
+        function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            fetch('https://www.airpurifier.electronicsideas.com/api/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username, password })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Login failed');
+                }
+                return response.json();
+            })
+            .then(data => {
+                authToken = data.token;
+                localStorage.setItem('authToken', authToken);
+                verifyToken();
+            })
+            .catch(error => {
+                document.getElementById('login-message').textContent = 'Login failed. Please check your credentials.';
+                console.error('Login error:', error);
+            });
+        }
+        
+        function verifyToken() {
+            fetch('https://www.airpurifier.electronicsideas.com/api/auth/verify', {
+                headers: {
+                    'Authorization': 'Bearer ' + authToken
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Token verification failed');
+                }
+                return response.json();
+            })
+            .then(data => {
+                currentUser = data.user;
+                document.getElementById('user-greeting').textContent = 'Welcome, ' + currentUser.username;
+                showAppContent();
+                
+                // Load user data if admin
+                if (currentUser.is_admin) {
+                    document.getElementById('admin-panel').classList.remove('hidden');
+                    loadUsers();
+                }
+                
+                // Load the main app data
+                updateData();
+            })
+            .catch(error => {
+                localStorage.removeItem('authToken');
+                authToken = null;
+                showLoginPage();
+                console.error('Token verification error:', error);
+            });
+        }
+        
+        function logout() {
+            localStorage.removeItem('authToken');
+            authToken = null;
+            currentUser = null;
+            showLoginPage();
+        }
+        
+        function loadUsers() {
+            fetch('https://www.airpurifier.electronicsideas.com/api/users', {
+                headers: {
+                    'Authorization': 'Bearer ' + authToken
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to load users');
+                }
+                return response.json();
+            })
+            .then(data => {
+                const usersTable = document.getElementById('users-table-body');
+                usersTable.innerHTML = '';
+                
+                data.users.forEach(user => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${user.username}</td>
+                        <td>${user.is_admin ? 'Yes' : 'No'}</td>
+                        <td>${new Date(user.created_at).toLocaleDateString()}</td>
+                        <td>
+                            <button onclick="editUser(${user.id})">Edit</button>
+                            <button onclick="deleteUser(${user.id})" ${user.id === currentUser.id ? 'disabled' : ''}>Delete</button>
+                        </td>
+                    `;
+                    usersTable.appendChild(row);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading users:', error);
+            });
+        }
         // Current data
         let airQuality = 0;
         let fanState = )===== ";
@@ -705,9 +1149,9 @@ void setup() {
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
     // Handle settings changes
     if (request->hasParam("threshold")) {
-      // You can implement threshold setting here
       String threshold = request->getParam("threshold")->value();
-      // You might want to store this in EEPROM or a variable
+      autoThreshold = threshold.toInt();
+      Serial.println("Threshold updated to: " + String(autoThreshold));
     }
     request->send(200, "text/plain", "OK");
   });
@@ -743,16 +1187,27 @@ void loop() {
 
   // 2. Automatic Control Logic
   if (autoMode == "ON") {
-    if (air_quality > 300) { // Threshold to turn fan ON
+    if (air_quality > autoThreshold) { // Use the configurable threshold
       digitalWrite(RELAY_PIN, HIGH);
       fanState = true;
-    } else if (air_quality < 200) { // Threshold to turn fan OFF (hysteresis)
+    } else if (air_quality < (autoThreshold - 100)) { // Hysteresis: 100 PPM below threshold
       digitalWrite(RELAY_PIN, LOW);
       fanState = false;
     }
   }
 
-  // 3. Update OLED Display with status bar
+  // 3. Send data to backend periodically
+  if (wifiConnected && millis() - lastDataSendTime > dataSendInterval) {
+    sendDataToBackend(air_quality, fanState, autoMode == "ON");
+    lastDataSendTime = millis();
+    
+    // Also update settings from backend occasionally
+    if (random(0, 10) < 3) { // 30% chance to update settings each cycle
+      getSettingsFromBackend();
+    }
+  }
+
+  // 4. Update OLED Display with status bar
   display.clearDisplay();
   
   // Draw status bar at the top
@@ -782,6 +1237,14 @@ void loop() {
     display.print("MAN");
   }
   
+  // Display backend connection status
+  display.setCursor(SCREEN_WIDTH - 40, 0);
+  if (isAuthenticated) {
+    display.print("B_OK");
+  } else if (wifiConnected) {
+    display.print("B_ERR");
+  }
+  
   // Display main data
   display.setTextSize(1);
   display.setCursor(0, 12);
@@ -797,14 +1260,19 @@ void loop() {
   display.print("Mode: ");
   display.println(autoMode);
   
+  display.setCursor(0, 48);
+  display.print("Threshold: ");
+  display.print(autoThreshold);
+  display.println(" PPM");
+  
   if (wifiConnected) {
-    display.setCursor(0, 48);
+    display.setCursor(0, 56);
     display.print("IP: ");
     display.println(WiFi.localIP());
   }
   
   display.display();
 
-  // 4. Add a delay between loops
+  // 5. Add a delay between loops
   delay(2000); // Update every 2 seconds
 }

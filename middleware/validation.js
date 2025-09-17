@@ -33,3 +33,33 @@ exports.validateUser = [
     .isLength({ min: 6 })
     .withMessage('Password must be at least 6 characters long')
 ];
+
+// Validation for user updates (password optional)
+exports.validateUserUpdate = [
+  body('username')
+    .optional()
+    .isLength({ min: 3, max: 20 })
+    .withMessage('Username must be between 3 and 20 characters')
+    .matches(/^[a-zA-Z0-9_]+$/)
+    .withMessage('Username can only contain letters, numbers, and underscores'),
+  
+  body('password')
+    .optional()
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters long'),
+  
+  body('is_admin')
+    .optional()
+    .isBoolean()
+    .withMessage('is_admin must be a boolean value')
+];
+
+exports.validatePasswordChange = [
+  body('currentPassword')
+    .notEmpty()
+    .withMessage('Current password is required'),
+  
+  body('newPassword')
+    .isLength({ min: 6 })
+    .withMessage('New password must be at least 6 characters long')
+];

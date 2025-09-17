@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Air Purifier Control</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+
+<body>
+  <header>
+    <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
+    <p>Monitor and control your air purification system</p>
+  </header>
+
+  <div class="container">
+    <div class="status-bar">
+      <div class="status-item">
+        <div class="status-value" id="wifi-status"><i class='fas fa-wifi'></i> Connected</div>
+        <div class="status-label">Network</div>
+      </div>
+      <div class="status-item">
+        <div class="status-value" id="fan-status"><i class='fas fa-fan'></i> OFF</div>
+        <div class="status-label">Fan</div>
+      </div>
+      <div class="status-item">
+        <div class="status-value" id="auto-status"><i class='fas fa-robot'></i> AUTO</div>
+        <div class="status-label">Mode</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sensors">
+        <div class="sensor-card">
+          <div class="sensor-title">Input Air Quality</div>
+          <div class="sensor-value" id="input-air-quality-value">0 PPM</div>
+          <div class="sensor-label">Before Filtration</div>
+        </div>
+
+        <div class="sensor-card">
+          <div class="sensor-title">Output Air Quality</div>
+          <div class="sensor-value" id="output-air-quality-value">0 PPM</div>
+          <div class="sensor-label">After Filtration</div>
+        </div>
+
+        <div class="sensor-card">
+          <div class="sensor-title">Filtration Efficiency</div>
+          <div class="sensor-value" id="efficiency-value">0%</div>
+          <div class="sensor-label">Effectiveness</div>
+        </div>
+      </div>
+
+      <div class="gauges-container">
+        <div class="gauge">
+          <div class="gauge-title">Input Air Quality</div>
+          <div class="gauge-circle"></div>
+          <div class="gauge-needle" id="input-gauge-needle"></div>
+          <div class="gauge-center"></div>
+          <div class="gauge-value" id="input-gauge-value">0 PPM</div>
+        </div>
+
+        <div class="gauge">
+          <div class="gauge-title">Output Air Quality</div>
+          <div class="gauge-circle"></div>
+          <div class="gauge-needle" id="output-gauge-needle"></div>
+          <div class="gauge-center"></div>
+          <div class="gauge-value" id="output-gauge-value">0 PPM</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="control-card">
+        <div class="control-title">Fan Control</div>
+        <div class="toggle-container">
+          <button class="toggle-btn toggle-btn-fan" id="toggle-fan">
+            <i class="fas fa-fan"></i> <span id="fan-btn-text">Turn ON</span>
+          </button>
+          <div class="status-indicator" id="fan-status-indicator">Fan is OFF</div>
+        </div>
+      </div>
+
+      <div class="control-card">
+        <div class="control-title">Operation Mode</div>
+        <div class="toggle-container">
+          <button class="toggle-btn toggle-btn-mode" id="toggle-mode">
+            <i class="fas fa-cog"></i> <span id="mode-btn-text">Switch to Manual</span>
+          </button>
+          <div class="status-indicator" id="mode-status-indicator">Auto Mode Active</div>
+        </div>
+      </div>
+
+      <div class="control-card">
+        <div class="control-title">Settings</div>
+        <div class="slider-container">
+          <label for="threshold">Auto Threshold: <span id="threshold-value">300</span> PPM</label>
+          <input type="range" min="100" max="1000" value="300" class="slider" id="threshold">
+        </div>
+      </div>
+    </div>
+
+    <div class="history-section">
+      <h3><i class="fas fa-chart-line"></i> Historical Data</h3>
+
+      <div class="history-tabs">
+        <div class="history-tab active" data-tab="chart">Chart</div>
+        <div class="history-tab" data-tab="table">Data Table</div>
+      </div>
+
+      <div class="history-content active" id="chart-content">
+        <div class="chart-container" id="chart-container"></div>
+      </div>
+
+      <div class="history-content" id="table-content">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Input (PPM)</th>
+              <th>Output (PPM)</th>
+              <th>Efficiency</th>
+              <th>Fan Status</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body">
+            <!-- Data will be populated here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="last-updated" id="last-updated-full"></div>
+
+  <footer>
+    <p>Air Purifier System | © 2025</p>
+  </footer>
+  <script src="script.js"></script>
+
+</body>
+
+</html>

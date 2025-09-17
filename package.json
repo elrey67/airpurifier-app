@@ -4,14 +4,17 @@
   "description": "Backend for IoT Air Purifier System",
   "main": "server.js",
  
-  "scripts": {
+   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
     "backup": "node scripts/backup.js",
     "create-user": "node scripts/createUser.js",
+    "create-admin": "node utils/createDefaultAdmin.js",
     "logs": "tail -f logs/combined.log",
-    "errors": "tail -f logs/error.log"
+    "errors": "tail -f logs/error.log",
+    "migrate": "node scripts/migrateDatabase.js"
   },
+ 
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
