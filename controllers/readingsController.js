@@ -107,3 +107,70 @@ exports.getStats = (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Add to your existing readingsController
+exports.storeDeviceData = async (req, res) => {
+  try {
+    const { device_id, air_quality, fan_state, auto_mode } = req.body;
+    const deviceId = device_id || 'esp32_air_purifier_01';
+    
+    await db.storeDeviceStatus(deviceId, air_quality, fan_state, auto_mode, req.ip);
+    
+    // Check for pending commands
+    const pendingCommands = await db.getPendingCommands(deviceId);
+    
+    res.json({ 
+      success: true, 
+      message: 'Data stored successfully',
+      pending_commands: pendingCommands.length
+    });
+  } catch (error) {
+    logger.error('Error storing device data:', error);
+    res.status(500).json({ error: 'Failed to store device data' });
+  }
+};
+
+exports.getLatestData = async (req, res) => {
+  try {
+    const deviceId = req.query.device_id || 'esp32_air_purifier_01';
+    const status = await db.getLatestStatus(deviceId);
+    const online = await db.isDeviceOnline(deviceId);
+    
+    if (status) {
+      res.json({
+        status: online ? 'online' : 'offline',
+        data: {
+          air_quality: status.air_quality,
+          fan_state: status.fan_state,
+          auto_mode: status.auto_mode,
+          timestamp: status.last_seen
+        },
+        last_updated: status.last_seen
+      });
+    } else {
+      res.json({
+        status: 'offline',
+        message: 'No data available',
+        last_updated: null
+      });
+    }
+  } catch (error) {
+    logger.error('Error getting latest data:', error);
+    res.status(500).json({ error: 'Failed to get latest data' });
+  }
+};
+
+exports.getHistoricalData = async (req, res) => {
+  try {
+    const deviceId = req.query.device_id || 'esp32_air_purifier_01';
+    const hours = parseInt(req.query.hours) || 24;
+    const limit = parseInt(req.query.limit) || 1000;
+    
+    const data = await db.getHistoricalData(deviceId, hours, limit);
+    
+    res.json(data);
+  } catch (error) {
+    logger.error('Error getting historical data:', error);
+    res.status(500).json({ error: 'Failed to get historical data' });
+  }
+};

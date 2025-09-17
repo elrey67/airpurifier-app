@@ -3,31 +3,58 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
+const fs = require('fs'); // Add this import
+const https = require('https'); // Add this import
 const { generalLimiter } = require('./middleware/rateLimit');
 const apiRoutes = require('./routes/api');
 const logger = require('./utils/logger');
-const createDefaultAdmin = require('./utils/createDefaultAdmin'); // Add this import
+require('./config/database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '172.20.10.3'; // Use environment variable or default
+const HOST = process.env.HOST || '172.20.10.3';
+
+// SSL certificate configuration
+const sslOptions = {
+    key: fs.readFileSync(path.join(__dirname, 'server.key')),
+    cert: fs.readFileSync(path.join(__dirname, 'server.crt'))
+};
+
+// Create HTTPS server
+const httpsServer = https.createServer(sslOptions, app);
 
 // Store server instance for graceful shutdown
 let server;
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      "script-src": ["'self'", "'unsafe-inline'"],
+      "style-src": ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+      "font-src": ["'self'", "https://cdnjs.cloudflare.com", "data:"],
+      "img-src": ["'self'", "data:"]
+    }
+  }
+}));
+
+// CORS configuration
 app.use(cors({
   origin: [
-    `http://${HOST}:${PORT}`,
+    `https://${HOST}:${PORT}`,
     'http://airpurifier.electronicsideas.com',
     'https://airpurifier.electronicsideas.com',
-    'http://localhost:3000', // For development
-    'http://localhost', // For development
-    'http://172.20.10.3:3000' // Local network access
+    'https://localhost:3000',
+    'https://localhost',
+    'https://172.20.10.3:3000',
+    'https://172.20.10.3:3000/script.js',
+    'https://172.20.10.3:3000/style.css',
+    'https://172.20.10.3:3000/admin/admin.js',
+    'https://172.20.10.3:3000/admin/admin.css'
   ],
   credentials: true
 }));
+
 app.use(generalLimiter);
 
 // Request logging middleware
@@ -53,7 +80,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
+
+// API Routes
 app.use('/api', apiRoutes);
 
 // Health check endpoint
@@ -61,7 +91,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'Server is running' });
 });
 
-app.get('/', (req, res) => {
+// API info endpoint (kept for API clients)
+app.get('/api-info', (req, res) => {
   res.status(200).json({ 
     message: 'Air Purifier API Server', 
     version: '1.0.0',
@@ -89,10 +120,18 @@ app.get('/admin/admin.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin', 'admin.js'));
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-  logger.warn('Route not found', { url: req.originalUrl, method: req.method });
-  res.status(404).json({ error: 'Route not found' });
+// Serve frontend for all non-API routes
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/admin')) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 404 handler for API routes
+app.use('/api/*', (req, res) => {
+  logger.warn('API route not found', { url: req.originalUrl, method: req.method });
+  res.status(404).json({ error: 'API route not found' });
 });
 
 // Error handling middleware
@@ -109,10 +148,12 @@ app.use((err, req, res, next) => {
 // Function to start server
 const startServer = () => {
   return new Promise((resolve, reject) => {
-    server = app.listen(PORT, HOST, () => {
-      logger.info(`Server running on http://${HOST}:${PORT}`);
+    // Use httpsServer instead of app.listen
+    server = httpsServer.listen(PORT, HOST, () => {
+      logger.info(`HTTPS Server running on https://${HOST}:${PORT}`); // Updated log message
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`Allowed domains: ${process.env.APP_URL}, airpurifier.electronicsideas.com`);
+      logger.info(`Serving frontend from: ${path.join(__dirname, 'public')}`);
       resolve(server);
     });
     
@@ -255,17 +296,11 @@ const killProcessesOnPort = (port) => {
 };
 
 // Main function to start the application
+// Main function to start the application
 const main = async () => {
   try {
-    // Ensure default admin user exists
-    logger.info('Checking if default admin user exists...');
-    try {
-      await createDefaultAdmin();
-      logger.info('Default admin user check completed');
-    } catch (error) {
-      logger.error('Error creating default admin user:', error);
-      // Don't exit, as the server might still be able to run
-    }
+    // Database initialization (including admin creation) happens when we require the database file
+    logger.info('Initializing database...');
     
     // Try to kill any processes on our port first
     await killProcessesOnPort(PORT);

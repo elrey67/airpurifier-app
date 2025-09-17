@@ -1,9 +1,9 @@
-const db = require('../config/database');
+const { db } = require('../config/database'); // Fixed import - destructure db
 const bcrypt = require('bcryptjs');
 const logger = require('./logger');
 
 async function createDefaultAdmin() {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     try {
       // Check if any users exist
       db.get('SELECT COUNT(*) as count FROM users', async (err, row) => {
