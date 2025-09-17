@@ -125,6 +125,8 @@ class AdminApp {
             console.error('Token verification error:', error);
         }
     }
+
+    
     
     logout() {
         localStorage.removeItem('authToken');

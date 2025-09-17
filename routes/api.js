@@ -13,8 +13,41 @@ const settingsController = require('../controllers/settingsController'); // We'l
 // Public routes
 router.post('/auth/register', authLimiter, validateUser, authController.register);
 router.post('/auth/login', authLimiter, validateUser, authController.login);
+// In routes/api.js - Update the verify route
+router.get('/auth/verify', auth, async (req, res) => {
+  try {
+    // Get full user details including is_admin
+    const { db } = require('../config/database');
+    
+    db.get('SELECT id, username, is_admin FROM users WHERE id = ?', [req.userId], (err, user) => {
+      if (err || !user) {
+        return res.status(401).json({ 
+          valid: false, 
+          error: 'User not found' 
+        });
+      }
+      
+      // Return full user details including is_admin
+      res.json({
+        valid: true,
+        message: 'Token is valid',
+        user: {
+          id: user.id,
+          username: user.username,
+          is_admin: user.is_admin,
+          created_at: user.created_at
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Verify endpoint error:', error);
+    res.status(500).json({ 
+      valid: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
 router.post('/auth/change-password', auth, userController.changePassword);
-
 // Data submission from ESP32
 router.post('/readings', dataLimiter, validateReading, readingsController.addReading);
 router.post('/device-data', dataLimiter, readingsController.storeDeviceData); // New endpoint for ESP32 data sync

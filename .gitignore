@@ -4,3 +4,12 @@ backups/
 .env
 .DS_Store
 *.log
+.vscode/
+npm-debug.log*
+yarn-error.log*
+pids/
+*.pid
+*.seed
+server.crt
+server.csr
+server.key

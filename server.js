@@ -3,8 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-const fs = require('fs'); // Add this import
-const https = require('https'); // Add this import
+const fs = require('fs');
+const https = require('https');
 const { generalLimiter } = require('./middleware/rateLimit');
 const apiRoutes = require('./routes/api');
 const logger = require('./utils/logger');
@@ -55,6 +55,11 @@ app.use(cors({
   credentials: true
 }));
 
+// CRITICAL FIX: Body parsing middleware MUST come BEFORE rate limiting and API routes
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting AFTER body parsing
 app.use(generalLimiter);
 
 // Request logging middleware
@@ -76,14 +81,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Body parsing middleware
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true }));
+// Debug middleware for API routes (remove in production)
+app.use('/api', (req, res, next) => {
+  console.log(`[API DEBUG] ${req.method} ${req.originalUrl}`);
+  console.log(`[API DEBUG] Body:`, req.body);
+  console.log(`[API DEBUG] Headers:`, req.headers);
+  next();
+});
 
-// Serve static files from public directory
-app.use(express.static(path.join(__dirname, 'public')));
-
-// API Routes
+// API Routes - MUST come before static files and catch-all routes
 app.use('/api', apiRoutes);
 
 // Health check endpoint
@@ -120,6 +126,10 @@ app.get('/admin/admin.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin', 'admin.js'));
 });
 
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
+
+// IMPORTANT: This catch-all route MUST come AFTER API routes
 // Serve frontend for all non-API routes
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/admin')) {
@@ -130,8 +140,25 @@ app.get('*', (req, res, next) => {
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {
-  logger.warn('API route not found', { url: req.originalUrl, method: req.method });
-  res.status(404).json({ error: 'API route not found' });
+  logger.warn('API route not found', { 
+    url: req.originalUrl, 
+    method: req.method,
+    body: req.body 
+  });
+  res.status(404).json({ 
+    error: 'API route not found',
+    method: req.method,
+    url: req.originalUrl,
+    availableRoutes: [
+      'POST /api/test',
+      'POST /api/readings',
+      'POST /api/device-data',
+      'POST /api/auth/register',
+      'POST /api/auth/login',
+      'GET /api/latest-data',
+      'GET /api/device-status'
+    ]
+  });
 });
 
 // Error handling middleware
@@ -150,7 +177,7 @@ const startServer = () => {
   return new Promise((resolve, reject) => {
     // Use httpsServer instead of app.listen
     server = httpsServer.listen(PORT, HOST, () => {
-      logger.info(`HTTPS Server running on https://${HOST}:${PORT}`); // Updated log message
+      logger.info(`HTTPS Server running on https://${HOST}:${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`Allowed domains: ${process.env.APP_URL}, airpurifier.electronicsideas.com`);
       logger.info(`Serving frontend from: ${path.join(__dirname, 'public')}`);
@@ -295,7 +322,6 @@ const killProcessesOnPort = (port) => {
   });
 };
 
-// Main function to start the application
 // Main function to start the application
 const main = async () => {
   try {

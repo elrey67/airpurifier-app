@@ -1,4 +1,5 @@
-const db = require('../config/database');
+// middleware/adminAuth.js - FIXED
+const { db } = require('../config/database'); // Destructure db from the object
 const logger = require('../utils/logger');
 
 module.exports = (req, res, next) => {

@@ -355,3 +355,8 @@ tr:hover {
         padding: 15px;
     }
 }
+
+h1{
+    color: var(--accent);
+    margin-bottom: 20px;
+}
