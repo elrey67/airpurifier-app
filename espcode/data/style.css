@@ -61,10 +61,12 @@ body {
     border-radius: 20px;
     padding: 20px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    margin-top: 20px;
 }
 
 header {
     text-align: center;
+    margin-bottom: 20px;
     position: relative;
 }
 
@@ -76,9 +78,13 @@ h1 {
 }
 
 .connection-status {
+    position: absolute;
+    top: 10px;
+    right: 10px;
     padding: 5px 10px;
     border-radius: 15px;
-    font-size: 1rem;
+    font-size: 0.9rem;
+    display: flex;
     align-items: center;
     gap: 5px;
 }
@@ -126,7 +132,6 @@ h1 {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 15px;
-    margin-top:20px;
 }
 
 .sensor-card {
@@ -298,7 +303,7 @@ h1 {
 }
 
 .toggle-btn-fan.active {
-    background: var(--success);
+    background: 'var(--success)';
 }
 
 .toggle-btn-mode {
@@ -313,6 +318,11 @@ h1 {
 .toggle-btn:hover {
     opacity: 0.9;
     transform: scale(1.05);
+}
+
+.toggle-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .status-indicator {
@@ -432,6 +442,30 @@ h1 {
     transition: height 0.5s ease;
 }
 
+.stats-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+}
+
+.stat-card {
+    background: var(--card-bg);
+    padding: 15px;
+    border-radius: 10px;
+    text-align: center;
+}
+
+.stat-title {
+    font-size: 0.9rem;
+    margin-bottom: 5px;
+    opacity: 0.8;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
 footer {
     margin-top: 30px;
     text-align: center;
@@ -453,13 +487,5 @@ footer {
 
     h1 {
         font-size: 2rem;
-    }
-    
-    .connection-status {
-        position: relative;
-        top: 0;
-        right: 0;
-        margin: 10px auto;
-        justify-content: center;
     }
 }

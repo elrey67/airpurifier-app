@@ -29,6 +29,18 @@ class AdminApp {
                 this.hideEditModal();
             }
         });
+        
+        // Event delegation for dynamically created buttons
+        document.getElementById('users-table-body').addEventListener('click', (e) => {
+            const target = e.target;
+            if (target.classList.contains('btn-edit')) {
+                const userId = parseInt(target.getAttribute('data-user-id'));
+                this.editUser(userId);
+            } else if (target.classList.contains('btn-delete')) {
+                const userId = parseInt(target.getAttribute('data-user-id'));
+                this.deleteUser(userId);
+            }
+        });
     }
     
     showLoginPage() {
@@ -169,8 +181,8 @@ class AdminApp {
                 <td>${user.is_admin ? 'Yes' : 'No'}</td>
                 <td>${new Date(user.created_at).toLocaleDateString()}</td>
                 <td>
-                    <button class="btn btn-secondary" onclick="adminApp.editUser(${user.id})">Edit</button>
-                    <button class="btn btn-danger" onclick="adminApp.deleteUser(${user.id})" 
+                    <button class="btn btn-secondary btn-edit" data-user-id="${user.id}">Edit</button>
+                    <button class="btn btn-danger btn-delete" data-user-id="${user.id}" 
                         ${user.id === this.currentUser.id ? 'disabled' : ''}>
                         Delete
                     </button>

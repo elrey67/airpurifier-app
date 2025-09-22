@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Air Purifier Control</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" type="text/css" href="/style.css">
+  <link rel="stylesheet" type="text/css" href="style.css">
 </head>
 
 <body>
@@ -14,7 +14,7 @@
     <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
     <p>Monitor and control your air purification system</p>
     <div class="connection-status" id="connection-status">
-      <i class="fas fa-circle"></i> <span id="connection-text">Connecting...</span>
+      <i class="fas fa-circle"></i> <span id="connection-text">Connecting to backend...</span>
     </div>
   </header>
 
@@ -115,6 +115,7 @@
       <div class="history-tabs">
         <div class="history-tab active" data-tab="chart">Chart</div>
         <div class="history-tab" data-tab="table">Data Table</div>
+        <div class="history-tab" data-tab="stats">Statistics</div>
       </div>
 
       <div class="history-content active" id="chart-content">
@@ -136,6 +137,27 @@
           </tbody>
         </table>
       </div>
+
+      <div class="history-content" id="stats-content">
+        <div class="stats-container">
+          <div class="stat-card">
+            <div class="stat-title">Current</div>
+            <div class="stat-value" id="current-value">0 PPM</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Average</div>
+            <div class="stat-value" id="average-value">0 PPM</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Maximum</div>
+            <div class="stat-value" id="max-value">0 PPM</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-title">Minimum</div>
+            <div class="stat-value" id="min-value">0 PPM</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -144,7 +166,7 @@
   <footer>
     <p>Air Purifier System | © 2025 | <span id="server-url"></span></p>
   </footer>
-  <script src="/script.js"></script>
+  <script src="script.js"></script>
 
 </body>
 

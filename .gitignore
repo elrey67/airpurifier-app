@@ -1,5 +1,7 @@
 node_modules/
 airquality.db
+airquality.db-shm
+airquality.db-wal
 backups/
 .env
 .DS_Store

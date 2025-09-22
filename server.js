@@ -172,6 +172,23 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
+
+// Generate a nonce for each request
+app.use((req, res, next) => {
+  res.locals.nonce = crypto.randomBytes(16).toString('base64');
+  next();
+});
+
+// Set CSP header with nonce
+app.use((req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    `script-src 'self' 'nonce-${res.locals.nonce}'`
+  );
+  next();
+});
+
+
 // Function to start server
 const startServer = () => {
   return new Promise((resolve, reject) => {
