@@ -1,20 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Air Purifier Control</title>
+  <title>Dual Sensor Air Purifier Control</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" type="text/css" href="style.css">
 </head>
-
 <body>
   <header>
-    <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
-    <p>Monitor and control your air purification system</p>
+    <h1><i class="fas fa-wind"></i> Dual Sensor Air Purifier Control</h1>
+    <p>Monitor and control your air purification system with dual sensor feedback</p>
     <div class="connection-status" id="connection-status">
-      <i class="fas fa-circle"></i> <span id="connection-text">Connecting to backend...</span>
+      <i class="fas fa-circle"></i> <span id="connection-text">Checking system status...</span>
     </div>
   </header>
 
@@ -22,7 +20,7 @@
     <div class="status-bar">
       <div class="status-item">
         <div class="status-value" id="wifi-status"><i class='fas fa-wifi'></i> Checking...</div>
-        <div class="status-label">Network</div>
+        <div class="status-label">System Mode</div>
       </div>
       <div class="status-item">
         <div class="status-value" id="fan-status"><i class='fas fa-fan'></i> --</div>
@@ -33,48 +31,59 @@
         <div class="status-label">Mode</div>
       </div>
       <div class="status-item">
-        <div class="status-value" id="device-status"><i class='fas fa-microchip'></i> Checking...</div>
-        <div class="status-label">Device</div>
+        <div class="status-value" id="efficiency-status"><i class='fas fa-chart-line'></i> --%</div>
+        <div class="status-label">Efficiency</div>
       </div>
     </div>
 
-    <div>
-      <div class="sensors">
-        <div class="sensor-card">
-          <div class="sensor-title">Air Quality</div>
-          <div class="sensor-value" id="air-quality-value">0 PPM</div>
-          <div class="sensor-label">Current Reading</div>
-        </div>
-
-        <div class="sensor-card">
-          <div class="sensor-title">Fan Status</div>
-          <div class="sensor-value" id="fan-display-value">OFF</div>
-          <div class="sensor-label">Current State</div>
-        </div>
-
-        <div class="sensor-card">
-          <div class="sensor-title">Operation Mode</div>
-          <div class="sensor-value" id="mode-display-value">AUTO</div>
-          <div class="sensor-label">Current Mode</div>
-        </div>
+    <div class="sensors-grid">
+      <div class="sensor-card input-sensor">
+        <div class="sensor-title"><i class="fas fa-sign-in-alt"></i> Input Air Quality</div>
+        <div class="sensor-value" id="input-air-quality-value">0 PPM</div>
+        <div class="sensor-label">Before Purification</div>
+        <div class="sensor-trend" id="input-trend"></div>
       </div>
 
-      <div class="gauges-container">
-        <div class="gauge">
-          <div class="gauge-title">Air Quality</div>
-          <div class="gauge-circle"></div>
-          <div class="gauge-needle" id="gauge-needle"></div>
-          <div class="gauge-center"></div>
-          <div class="gauge-value" id="gauge-value">0 PPM</div>
-        </div>
+      <div class="sensor-card output-sensor">
+        <div class="sensor-title"><i class="fas fa-sign-out-alt"></i> Output Air Quality</div>
+        <div class="sensor-value" id="output-air-quality-value">0 PPM</div>
+        <div class="sensor-label">After Purification</div>
+        <div class="sensor-trend" id="output-trend"></div>
+      </div>
 
-        <div class="gauge">
-          <div class="gauge-title">Threshold</div>
-          <div class="gauge-circle-threshold"></div>
-          <div class="gauge-needle-threshold" id="threshold-gauge-needle"></div>
-          <div class="gauge-center"></div>
-          <div class="gauge-value" id="threshold-gauge-value">300 PPM</div>
+      <div class="sensor-card efficiency-card">
+        <div class="sensor-title"><i class="fas fa-percentage"></i> System Efficiency</div>
+        <div class="sensor-value" id="efficiency-value">0%</div>
+        <div class="sensor-label">Purification Effectiveness</div>
+        <div class="efficiency-bar">
+          <div class="efficiency-fill" id="efficiency-fill"></div>
         </div>
+      </div>
+    </div>
+
+    <div class="gauges-container">
+      <div class="gauge">
+        <div class="gauge-title">Input Air Quality</div>
+        <div class="gauge-circle"></div>
+        <div class="gauge-needle" id="input-gauge-needle"></div>
+        <div class="gauge-center"></div>
+        <div class="gauge-value" id="input-gauge-value">0 PPM</div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-title">Output Air Quality</div>
+        <div class="gauge-circle"></div>
+        <div class="gauge-needle" id="output-gauge-needle"></div>
+        <div class="gauge-center"></div>
+        <div class="gauge-value" id="output-gauge-value">0 PPM</div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-title">Efficiency</div>
+        <div class="gauge-circle-efficiency"></div>
+        <div class="gauge-needle" id="efficiency-gauge-needle"></div>
+        <div class="gauge-center"></div>
+        <div class="gauge-value" id="efficiency-gauge-value">0%</div>
       </div>
     </div>
 
@@ -109,17 +118,42 @@
       </div>
     </div>
 
+    <div class="comparison-section">
+      <h3><i class="fas fa-balance-scale"></i> Air Quality Comparison</h3>
+      <div class="comparison-chart" id="comparison-chart">
+        <div class="comparison-bar input-bar" id="input-comparison-bar">
+          <span class="bar-label">Input</span>
+        </div>
+        <div class="comparison-bar output-bar" id="output-comparison-bar">
+          <span class="bar-label">Output</span>
+        </div>
+      </div>
+      <div class="improvement-value" id="improvement-value">
+        Air Quality Improvement: <span id="improvement-amount">0</span> PPM
+      </div>
+    </div>
+
     <div class="history-section">
       <h3><i class="fas fa-chart-line"></i> Historical Data</h3>
 
       <div class="history-tabs">
-        <div class="history-tab active" data-tab="chart">Chart</div>
+        <div class="history-tab active" data-tab="input-chart">Input Quality</div>
+        <div class="history-tab" data-tab="output-chart">Output Quality</div>
+        <div class="history-tab" data-tab="efficiency-chart">Efficiency</div>
         <div class="history-tab" data-tab="table">Data Table</div>
         <div class="history-tab" data-tab="stats">Statistics</div>
       </div>
 
-      <div class="history-content active" id="chart-content">
-        <div class="chart-container" id="chart-container"></div>
+      <div class="history-content active" id="input-chart-content">
+        <div class="chart-container" id="input-chart-container"></div>
+      </div>
+
+      <div class="history-content" id="output-chart-content">
+        <div class="chart-container" id="output-chart-container"></div>
+      </div>
+
+      <div class="history-content" id="efficiency-chart-content">
+        <div class="chart-container" id="efficiency-chart-container"></div>
       </div>
 
       <div class="history-content" id="table-content">
@@ -127,9 +161,12 @@
           <thead>
             <tr>
               <th>Time</th>
-              <th>Air Quality (PPM)</th>
+              <th>Input (PPM)</th>
+              <th>Output (PPM)</th>
+              <th>Efficiency</th>
               <th>Fan Status</th>
-              <th>Operation Mode</th>
+              <th>Mode</th>
+              <th>Source</th>
             </tr>
           </thead>
           <tbody id="history-table-body">
@@ -141,20 +178,20 @@
       <div class="history-content" id="stats-content">
         <div class="stats-container">
           <div class="stat-card">
-            <div class="stat-title">Current</div>
-            <div class="stat-value" id="current-value">0 PPM</div>
+            <div class="stat-title">Current Input</div>
+            <div class="stat-value" id="current-input-value">0 PPM</div>
           </div>
           <div class="stat-card">
-            <div class="stat-title">Average</div>
-            <div class="stat-value" id="average-value">0 PPM</div>
+            <div class="stat-title">Current Output</div>
+            <div class="stat-value" id="current-output-value">0 PPM</div>
           </div>
           <div class="stat-card">
-            <div class="stat-title">Maximum</div>
-            <div class="stat-value" id="max-value">0 PPM</div>
+            <div class="stat-title">Average Efficiency</div>
+            <div class="stat-value" id="average-efficiency-value">0%</div>
           </div>
           <div class="stat-card">
-            <div class="stat-title">Minimum</div>
-            <div class="stat-value" id="min-value">0 PPM</div>
+            <div class="stat-title">Max Improvement</div>
+            <div class="stat-value" id="max-improvement-value">0 PPM</div>
           </div>
         </div>
       </div>
@@ -167,7 +204,5 @@
     <p>Air Purifier System | © 2025 | <span id="server-url"></span></p>
   </footer>
   <script src="script.js"></script>
-
 </body>
-
 </html>

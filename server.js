@@ -46,11 +46,11 @@ app.use(cors({
     'https://airpurifier.electronicsideas.com',
     'https://localhost:3000',
     'https://localhost',
-    'https://172.20.10.3:3000',
-    'https://172.20.10.3:3000/script.js',
-    'https://172.20.10.3:3000/style.css',
-    'https://172.20.10.3:3000/admin/admin.js',
-    'https://172.20.10.3:3000/admin/admin.css'
+    'https://172.20.10.2:3000',
+    'https://172.20.10.2:3000/script.js',
+    'https://172.20.10.2:3000/style.css',
+    'https://172.20.10.2:3000/admin/admin.js',
+    'https://172.20.10.2:3000/admin/admin.css'
   ],
   credentials: true
 }));

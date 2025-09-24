@@ -1,4 +1,4 @@
-const db = require('../config/database');
+const {db} = require('../config/database');
 const logger = require('../utils/logger');
 
 exports.getDeviceStatus = async (req, res) => {

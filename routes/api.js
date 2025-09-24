@@ -49,8 +49,8 @@ router.get('/auth/verify', auth, async (req, res) => {
 });
 router.post('/auth/change-password', auth, userController.changePassword);
 // Data submission from ESP32
-router.post('/readings', dataLimiter, validateReading, readingsController.addReading);
-router.post('/device-data', dataLimiter, readingsController.storeDeviceData); // New endpoint for ESP32 data sync
+router.post('/readings', validateReading, readingsController.addReading); 
+router.post('/device-data',  readingsController.storeDeviceData); // New endpoint for ESP32 data sync
 
 // Device status and data routes
 router.get('/device-status', generalLimiter, deviceController.getDeviceStatus); // Get current device status

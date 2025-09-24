@@ -11,37 +11,50 @@ const db = new sqlite3.Database(dbPath, (err) => {
     console.error('Error opening database:', err.message);
   } else {
     console.log('Connected to SQLite database.');
-    
+
     // Enable foreign keys and WAL mode for better performance
     db.run('PRAGMA foreign_keys = ON');
     db.run('PRAGMA journal_mode = WAL');
-    
+
     // Create tables if they don't exist
     db.serialize(() => {
-      // Device status table (stores historical readings)
-      db.run(`CREATE TABLE IF NOT EXISTS readings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT NOT NULL,
-        air_quality REAL NOT NULL,
-        fan_state BOOLEAN NOT NULL,
-        auto_mode BOOLEAN NOT NULL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`);
-      
-      // Current device status table (for real-time updates)
-      db.run(`CREATE TABLE IF NOT EXISTS current_status (
+      // Create devices table first (since other tables reference it)
+      db.run(`CREATE TABLE IF NOT EXISTS devices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT UNIQUE NOT NULL,
-        air_quality REAL NOT NULL,
-        fan_state BOOLEAN NOT NULL,
-        auto_mode BOOLEAN NOT NULL,
-        ip_address TEXT,
-        online BOOLEAN DEFAULT FALSE,
-        last_seen DATETIME,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
+        name TEXT DEFAULT 'Air Purifier',
+        location TEXT DEFAULT 'Living Room',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`);
-      
+
+      // Device status table (stores historical readings)
+      db.run(`CREATE TABLE IF NOT EXISTS readings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  input_air_quality REAL NOT NULL,       
+  output_air_quality REAL NOT NULL,      
+  efficiency REAL NOT NULL,               
+  fan_state BOOLEAN NOT NULL,
+  auto_mode BOOLEAN NOT NULL,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
+      // Current device status table (for real-time updates)
+      db.run(`CREATE TABLE IF NOT EXISTS current_status (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT UNIQUE NOT NULL,
+  input_air_quality REAL NOT NULL,       
+  output_air_quality REAL NOT NULL,       
+  efficiency REAL NOT NULL,              
+  fan_state BOOLEAN NOT NULL,
+  auto_mode BOOLEAN NOT NULL,
+  ip_address TEXT,
+  online BOOLEAN DEFAULT FALSE,
+  last_seen DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
+)`);
+
       // Users table
       db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,16 +63,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         is_admin BOOLEAN DEFAULT FALSE,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`);
-      
-      // Devices table
-      db.run(`CREATE TABLE IF NOT EXISTS devices (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT UNIQUE NOT NULL,
-        name TEXT DEFAULT 'Air Purifier',
-        location TEXT DEFAULT 'Living Room',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`);
-      
+
       // Settings table
       db.run(`CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,7 +72,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
       )`);
-      
+
       // Command queue table (for sending commands to devices)
       db.run(`CREATE TABLE IF NOT EXISTS command_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,12 +84,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
         processed_at DATETIME,
         FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
       )`);
-      
+
       // Create indexes for better performance
       db.run('CREATE INDEX IF NOT EXISTS idx_readings_device_id ON readings(device_id)');
       db.run('CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)');
       db.run('CREATE INDEX IF NOT EXISTS idx_command_queue_status ON command_queue(status)');
-      
+
       // Check if we need to create a default admin user and device
       createDefaultAdminUser();
       createDefaultDevice();
@@ -102,17 +106,17 @@ async function createDefaultAdminUser() {
         logger.error('Error checking users table:', err.message);
         return;
       }
-      
+
       if (row.count === 0) {
         // No users exist, create default admin
         const defaultUsername = 'admin';
         const defaultPassword = 'admin123'; // You should change this in production!
         const hashedPassword = await bcrypt.hash(defaultPassword, 12);
-        
+
         db.run(
           'INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)',
           [defaultUsername, hashedPassword, true],
-          function(err) {
+          function (err) {
             if (err) {
               logger.error('Error creating default admin user:', err.message);
             } else {
@@ -135,34 +139,49 @@ async function createDefaultAdminUser() {
 // Function to create default device
 function createDefaultDevice() {
   const defaultDeviceId = 'esp32_air_purifier_01';
-  
+
   // Check if device exists
   db.get('SELECT COUNT(*) as count FROM devices WHERE device_id = ?', [defaultDeviceId], (err, row) => {
     if (err) {
       logger.error('Error checking devices table:', err.message);
       return;
     }
-    
+
     if (row.count === 0) {
       // Create default device
       db.run(
         'INSERT INTO devices (device_id, name, location) VALUES (?, ?, ?)',
         [defaultDeviceId, 'Main Air Purifier', 'Living Room'],
-        function(err) {
+        function (err) {
           if (err) {
             logger.error('Error creating default device:', err.message);
           } else {
             logger.info('Default device created successfully');
-            
+
             // Create default settings for the device
             db.run(
               'INSERT INTO settings (device_id, threshold) VALUES (?, ?)',
               [defaultDeviceId, 300],
-              function(err) {
+              function (err) {
                 if (err) {
                   logger.error('Error creating default settings:', err.message);
                 } else {
                   logger.info('Default settings created successfully');
+                }
+              }
+            );
+
+            // Create initial current_status entry
+            db.run(
+              `INSERT OR IGNORE INTO current_status 
+               (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, online, last_seen) 
+               VALUES (?, 0, 0, 0, FALSE, TRUE, FALSE, datetime('now'))`,
+              [defaultDeviceId],
+              function (err) {
+                if (err) {
+                  logger.error('Error creating initial current_status:', err.message);
+                } else {
+                  logger.info('Initial current_status created successfully');
                 }
               }
             );
@@ -176,14 +195,14 @@ function createDefaultDevice() {
 }
 
 // Function to store device status (both historical and current)
-function storeDeviceStatus(deviceId, airQuality, fanState, autoMode, ipAddress = null) {
+function storeDeviceStatus(deviceId, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode, ipAddress = null) {
   return new Promise((resolve, reject) => {
     // Begin transaction
     db.serialize(() => {
       // Store historical reading
       db.run(
-        'INSERT INTO readings (device_id, air_quality, fan_state, auto_mode) VALUES (?, ?, ?, ?)',
-        [deviceId, airQuality, fanState, autoMode],
+        'INSERT INTO readings (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode) VALUES (?, ?, ?, ?, ?, ?)',
+        [deviceId, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode],
         function(err) {
           if (err) {
             logger.error('Error storing historical reading:', err.message);
@@ -195,9 +214,9 @@ function storeDeviceStatus(deviceId, airQuality, fanState, autoMode, ipAddress =
       // Update current status
       db.run(
         `INSERT OR REPLACE INTO current_status 
-         (device_id, air_quality, fan_state, auto_mode, ip_address, online, last_seen) 
-         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [deviceId, airQuality, fanState, autoMode, ipAddress, true],
+         (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, ip_address, online, last_seen) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [deviceId, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode, ipAddress, true],
         function(err) {
           if (err) {
             logger.error('Error updating current status:', err.message);
@@ -259,7 +278,7 @@ function addCommandToQueue(deviceId, command, value) {
     db.run(
       'INSERT INTO command_queue (device_id, command, value) VALUES (?, ?, ?)',
       [deviceId, command, value],
-      function(err) {
+      function (err) {
         if (err) {
           reject(err);
         } else {
@@ -290,14 +309,14 @@ function getPendingCommands(deviceId) {
 // Function to update command status
 function updateCommandStatus(commandId, status) {
   return new Promise((resolve, reject) => {
-    const processedAt = status === 'completed' || status === 'failed' 
-      ? "datetime('now')" 
+    const processedAt = status === 'completed' || status === 'failed'
+      ? "datetime('now')"
       : 'NULL';
-    
+
     db.run(
       `UPDATE command_queue SET status = ?, processed_at = ${processedAt} WHERE id = ?`,
       [status, commandId],
-      function(err) {
+      function (err) {
         if (err) {
           reject(err);
         } else {
@@ -332,7 +351,7 @@ function updateDeviceSettings(deviceId, settings) {
       `INSERT OR REPLACE INTO settings (device_id, threshold, updated_at) 
        VALUES (?, ?, datetime('now'))`,
       [deviceId, settings.threshold],
-      function(err) {
+      function (err) {
         if (err) {
           reject(err);
         } else {
@@ -347,7 +366,7 @@ function updateDeviceSettings(deviceId, settings) {
 function getHistoricalData(deviceId, hours = 24) {
   return new Promise((resolve, reject) => {
     db.all(
-      `SELECT air_quality, fan_state, auto_mode, timestamp 
+      `SELECT input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, timestamp 
        FROM readings 
        WHERE device_id = ? AND timestamp >= datetime('now', ?) 
        ORDER BY timestamp`,
@@ -369,7 +388,7 @@ function markDeviceOffline(deviceId) {
     db.run(
       'UPDATE current_status SET online = FALSE WHERE device_id = ?',
       [deviceId],
-      function(err) {
+      function (err) {
         if (err) {
           reject(err);
         } else {

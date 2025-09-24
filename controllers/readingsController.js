@@ -1,4 +1,4 @@
-const db = require('../config/database');
+const {db} = require('../config/database');
 const { validationResult } = require('express-validator');
 const logger = require('../utils/logger'); // Make sure to import logger
 
@@ -47,23 +47,31 @@ exports.addReading = (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
     
-    const { device_id, air_quality, fan_state, auto_mode } = req.body;
+    const { device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode } = req.body;
     
-    logger.info('New reading received', { device_id, air_quality, fan_state, auto_mode });
+    logger.info('New dual-sensor reading received', { 
+      device_id, 
+      input_air_quality, 
+      output_air_quality, 
+      efficiency, 
+      fan_state, 
+      auto_mode 
+    });
     
-    const query = `INSERT INTO readings (device_id, air_quality, fan_state, auto_mode) 
-                   VALUES (?, ?, ?, ?)`;
+    const query = `INSERT INTO readings 
+                  (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode) 
+                   VALUES (?, ?, ?, ?, ?, ?)`;
     
-    db.run(query, [device_id, air_quality, fan_state, auto_mode], function(err) {
+    db.run(query, [device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode], function(err) {
       if (err) {
         logger.error('Database error in addReading', { error: err.message });
         return res.status(500).json({ error: err.message });
       }
       
-      logger.info('Reading added successfully', { id: this.lastID });
+      logger.info('Dual sensor reading added successfully', { id: this.lastID });
       res.status(201).json({
         id: this.lastID,
-        message: 'Reading added successfully'
+        message: 'Dual sensor reading added successfully'
       });
     });
   } catch (error) {

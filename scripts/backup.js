@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
-const db = require('../config/database');
+const {db} = require('../config/database');
 
 // Ensure backups directory exists
 const backupsDir = path.join(__dirname, '..', 'backups');

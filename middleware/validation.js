@@ -2,23 +2,18 @@ const { body } = require('express-validator');
 
 // Validation for reading data
 exports.validateReading = [
-  body('device_id')
-    .notEmpty()
-    .withMessage('Device ID is required')
-    .isLength({ min: 1, max: 50 })
-    .withMessage('Device ID must be between 1 and 50 characters'),
-  
-  body('air_quality')
+  body('input_air_quality')
     .isFloat({ min: 0, max: 5000 })
-    .withMessage('Air quality must be a number between 0 and 5000'),
-  
-  body('fan_state')
-    .isBoolean()
-    .withMessage('Fan state must be a boolean'),
-  
-  body('auto_mode')
-    .isBoolean()
-    .withMessage('Auto mode must be a boolean')
+    .withMessage('Input air quality must be a number between 0 and 5000'),
+  body('output_air_quality')
+    .isFloat({ min: 0, max: 5000 })
+    .withMessage('Output air quality must be a number between 0 and 5000'),
+  body('efficiency')
+    .isFloat({ min: 0, max: 100 })
+    .withMessage('Efficiency must be a number between 0 and 100'),
+  body('device_id').notEmpty().withMessage('Device ID is required'),
+  body('fan_state').isBoolean().withMessage('Fan state must be a boolean'),
+  body('auto_mode').isBoolean().withMessage('Auto mode must be a boolean')
 ];
 
 // Validation for user registration/login
@@ -65,23 +60,25 @@ exports.validatePasswordChange = [
 ];
 
 // Device validation
-exports.validateDevice = (req, res, next) => {
-  const { device_id, name, location } = req.body;
+// Instead of separate validateDevice function, use express-validator chain
+exports.validateDevice = [
+  body('device_id')
+    .notEmpty()
+    .trim()
+    .withMessage('Device ID is required')
+    .isLength({ max: 100 })
+    .withMessage('Device ID must be less than 100 characters'),
   
-  if (!device_id || device_id.trim() === '') {
-    return res.status(400).json({ error: 'Device ID is required' });
-  }
+  body('name')
+    .optional()
+    .isLength({ max: 100 })
+    .withMessage('Device name must be less than 100 characters'),
   
-  if (name && name.length > 100) {
-    return res.status(400).json({ error: 'Device name must be less than 100 characters' });
-  }
-  
-  if (location && location.length > 100) {
-    return res.status(400).json({ error: 'Location must be less than 100 characters' });
-  }
-  
-  next();
-};
+  body('location')
+    .optional()
+    .isLength({ max: 100 })
+    .withMessage('Location must be less than 100 characters')
+];
 
 // Settings validation
 exports.validateSettings = (req, res, next) => {

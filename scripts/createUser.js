@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const db = require('../config/database');
+const {db} = require('../config/database');
 const crypto = require('crypto');
 
 const createDefaultUser = async () => {
