@@ -28,32 +28,50 @@ const db = new sqlite3.Database(dbPath, (err) => {
       )`);
 
       // Device status table (stores historical readings)
-      db.run(`CREATE TABLE IF NOT EXISTS readings (
+db.run(`CREATE TABLE IF NOT EXISTS readings (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id TEXT NOT NULL,
+  system_mode TEXT DEFAULT 'offline',  -- ADD THIS COLUMN
   input_air_quality REAL NOT NULL,       
   output_air_quality REAL NOT NULL,      
   efficiency REAL NOT NULL,               
   fan_state BOOLEAN NOT NULL,
   auto_mode BOOLEAN NOT NULL,
-  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
 )`);
 
       // Current device status table (for real-time updates)
-      db.run(`CREATE TABLE IF NOT EXISTS current_status (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id TEXT UNIQUE NOT NULL,
-  input_air_quality REAL NOT NULL,       
-  output_air_quality REAL NOT NULL,       
-  efficiency REAL NOT NULL,              
-  fan_state BOOLEAN NOT NULL,
-  auto_mode BOOLEAN NOT NULL,
-  ip_address TEXT,
-  online BOOLEAN DEFAULT FALSE,
-  last_seen DATETIME,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
-)`);
+      db.run(`-- Create current_status table if it doesn't exist
+CREATE TABLE IF NOT EXISTS current_status (
+  device_id TEXT PRIMARY KEY,
+  system_mode TEXT DEFAULT 'offline',
+  input_air_quality REAL DEFAULT 0,
+  output_air_quality REAL DEFAULT 0,
+  efficiency REAL DEFAULT 0,
+  fan_state INTEGER DEFAULT 0,
+  auto_mode INTEGER DEFAULT 1,
+  threshold INTEGER DEFAULT 300,
+  online INTEGER DEFAULT 0,
+  last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
+);`);
+// Safely add ip_address column only if it doesn't exist
+db.get("SELECT name FROM pragma_table_info('current_status') WHERE name='ip_address'", (err, row) => {
+    if (err) {
+        console.error('Error checking for ip_address column:', err.message);
+    } else if (!row) {
+        // Column doesn't exist, so add it
+        db.run('ALTER TABLE current_status ADD COLUMN ip_address TEXT', (alterErr) => {
+            if (alterErr) {
+                console.error('Error adding ip_address column:', alterErr.message);
+            } else {
+                console.log('✓ Added ip_address column to current_status table');
+            }
+        });
+    } else {
+        console.log('✓ ip_address column already exists in current_status table');
+    }
+});
 
       // Users table
       db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -195,33 +213,34 @@ function createDefaultDevice() {
 }
 
 // Function to store device status (both historical and current)
-function storeDeviceStatus(deviceId, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode, ipAddress = null) {
+function storeDeviceStatus(deviceId, system_mode, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode, ipAddress = null) {
   return new Promise((resolve, reject) => {
-    // Begin transaction
     db.serialize(() => {
-      // Store historical reading
+      // Store historical reading with ALL columns including system_mode
       db.run(
-        'INSERT INTO readings (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode) VALUES (?, ?, ?, ?, ?, ?)',
-        [deviceId, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode],
+        'INSERT INTO readings (device_id, system_mode, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [deviceId, system_mode, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode],
         function(err) {
           if (err) {
             logger.error('Error storing historical reading:', err.message);
             return reject(err);
           }
+          console.log('✓ Reading stored in readings table with system_mode:', system_mode);
         }
       );
       
       // Update current status
       db.run(
         `INSERT OR REPLACE INTO current_status 
-         (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, ip_address, online, last_seen) 
+         (device_id, system_mode, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, online, last_seen) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [deviceId, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode, ipAddress, true],
+        [deviceId, system_mode, inputAirQuality, outputAirQuality, efficiency, fanState, autoMode, system_mode === 'online'],
         function(err) {
           if (err) {
             logger.error('Error updating current status:', err.message);
             return reject(err);
           }
+          console.log('✓ Current status updated with system_mode:', system_mode);
           resolve(this.lastID);
         }
       );

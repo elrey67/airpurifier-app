@@ -7,16 +7,16 @@ const { validateReading, validateUser, validateUserUpdate, validateDevice, valid
 const readingsController = require('../controllers/readingsController');
 const authController = require('../controllers/authController');
 const userController = require('../controllers/userController');
-const deviceController = require('../controllers/deviceController'); // We'll create this
-const settingsController = require('../controllers/settingsController'); // We'll create this
+const deviceController = require('../controllers/deviceController');
+const settingsController = require('../controllers/settingsController');
 
-// Public routes
+// ===== PUBLIC ROUTES =====
 router.post('/auth/register', authLimiter, validateUser, authController.register);
 router.post('/auth/login', authLimiter, validateUser, authController.login);
-// In routes/api.js - Update the verify route
+
+// Token verification route
 router.get('/auth/verify', auth, async (req, res) => {
   try {
-    // Get full user details including is_admin
     const { db } = require('../config/database');
     
     db.get('SELECT id, username, is_admin FROM users WHERE id = ?', [req.userId], (err, user) => {
@@ -27,7 +27,6 @@ router.get('/auth/verify', auth, async (req, res) => {
         });
       }
       
-      // Return full user details including is_admin
       res.json({
         valid: true,
         message: 'Token is valid',
@@ -47,48 +46,57 @@ router.get('/auth/verify', auth, async (req, res) => {
     });
   }
 });
-router.post('/auth/change-password', auth, userController.changePassword);
-// Data submission from ESP32
-router.post('/readings', validateReading, readingsController.addReading); 
-router.post('/device-data',  readingsController.storeDeviceData); // New endpoint for ESP32 data sync
 
-// Device status and data routes
-router.get('/device-status', generalLimiter, deviceController.getDeviceStatus); // Get current device status
-router.get('/latest-data', generalLimiter, readingsController.getLatestData); // Get latest reading data
-router.get('/historical-data', auth, generalLimiter, readingsController.getHistoricalData); // Get historical data for charts
+// ===== ESP32 DEVICE ROUTES (No auth required for device communication) =====
+router.post('/readings', dataLimiter, readingsController.storeESP32Reading); // ESP32 sends data here
+router.get('/data', dataLimiter, deviceController.getDeviceData); // ESP32 fetches data/commands
+router.get('/commands/pending', dataLimiter, deviceController.getPendingCommands); // ESP32 checks commands
+router.put('/commands/:commandId/status', dataLimiter, deviceController.updateCommandStatus); // ESP32 updates command status
 
-// Protected routes (require authentication)
-router.get('/readings', auth, generalLimiter, readingsController.getReadings);
-router.get('/stats', auth, generalLimiter, readingsController.getStats);
-
-// Device management routes
-router.get('/devices', auth, generalLimiter, deviceController.getDevices);
-router.get('/devices/:deviceId', auth, generalLimiter, deviceController.getDevice);
-router.post('/devices', auth, adminAuth, validateDevice, deviceController.createDevice);
-router.put('/devices/:deviceId', auth, adminAuth, validateDevice, deviceController.updateDevice);
-router.delete('/devices/:deviceId', auth, adminAuth, deviceController.deleteDevice);
-
-// Settings management routes
-router.get('/settings', auth, generalLimiter, settingsController.getSettings);
-router.get('/settings/:deviceId', auth, generalLimiter, settingsController.getDeviceSettings);
-router.put('/settings/:deviceId', auth, adminAuth, validateSettings, settingsController.updateSettings);
-
-// Command routes for device control
-router.post('/command', auth, generalLimiter, deviceController.sendCommand); // Send command to device
-router.get('/commands/pending', generalLimiter, deviceController.getPendingCommands); // ESP32 checks for pending commands
-router.put('/commands/:commandId/status', generalLimiter, deviceController.updateCommandStatus); // Update command status
-
-// User management routes (admin only)
-router.get('/users', auth, adminAuth, userController.getUsers);
-router.post('/users', auth, adminAuth, validateUser, userController.createUser);
-router.put('/users/:id', auth, adminAuth, validateUserUpdate, userController.updateUser);
-router.delete('/users/:id', auth, adminAuth, userController.deleteUser);
+// ===== AUTHENTICATED ROUTES (Web interface) =====
+router.use(auth); // Apply auth to all routes below
 
 // User profile routes
-router.get('/profile', auth, userController.getProfile);
-router.put('/profile', auth, validateUserUpdate, userController.updateProfile);
+router.get('/profile', generalLimiter, userController.getProfile);
+router.put('/profile', generalLimiter, validateUserUpdate, userController.updateProfile);
+router.post('/auth/change-password', generalLimiter, userController.changePassword);
 
-// System status route
-router.get('/system-status', auth, generalLimiter, deviceController.getSystemStatus);
+// Readings data routes
+router.get('/readings', generalLimiter, readingsController.getReadings);
+router.get('/stats', generalLimiter, readingsController.getStats);
+router.get('/historical-data', generalLimiter, readingsController.getHistoricalData);
+router.get('/latest-data', generalLimiter, readingsController.getLatestData);
+
+// Device status and monitoring
+router.get('/device-status', generalLimiter, deviceController.getDeviceStatus);
+router.get('/system-status', generalLimiter, deviceController.getSystemStatus);
+
+// Device management (read-only for authenticated users)
+router.get('/devices', generalLimiter, deviceController.getDevices);
+router.get('/devices/:deviceId', generalLimiter, deviceController.getDevice);
+
+// Settings management (read-only for authenticated users)
+router.get('/settings', generalLimiter, settingsController.getSettings);
+router.get('/settings/:deviceId', generalLimiter, settingsController.getDeviceSettings);
+
+// Command sending (authenticated users can send commands)
+router.post('/command', generalLimiter, deviceController.sendCommand);
+
+// ===== ADMIN-ONLY ROUTES =====
+router.use(adminAuth); // Apply admin auth to all routes below
+
+// Device management (admin only)
+router.post('/devices', generalLimiter, validateDevice, deviceController.createDevice);
+router.put('/devices/:deviceId', generalLimiter, validateDevice, deviceController.updateDevice);
+router.delete('/devices/:deviceId', generalLimiter, deviceController.deleteDevice);
+
+// Settings management (admin only)
+router.put('/settings/:deviceId', generalLimiter, validateSettings, settingsController.updateSettings);
+
+// User management (admin only)
+router.get('/users', generalLimiter, userController.getUsers);
+router.post('/users', generalLimiter, validateUser, userController.createUser);
+router.put('/users/:id', generalLimiter, validateUserUpdate, userController.updateUser);
+router.delete('/users/:id', generalLimiter, userController.deleteUser);
 
 module.exports = router;

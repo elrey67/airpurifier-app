@@ -9,7 +9,7 @@ const { generalLimiter } = require('./middleware/rateLimit');
 const apiRoutes = require('./routes/api');
 const logger = require('./utils/logger');
 require('./config/database');
-
+const crypto = require('crypto'); // Add this line
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '172.20.10.3';

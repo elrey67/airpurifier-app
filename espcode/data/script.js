@@ -32,6 +32,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function initializeEventListeners() {
     console.log('Initializing event listeners...');
+
+        const sensorGrid = document.querySelector('.sensors-grid');
+    console.log('Sensor grid element:', sensorGrid);
+    
+    const sensorCards = document.querySelectorAll('.sensor-card');
+    console.log('Sensor cards found:', sensorCards.length);
     
     // Control event listeners
     const toggleFanBtn = document.getElementById('toggle-fan');

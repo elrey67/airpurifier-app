@@ -22,14 +22,10 @@
 const char* ssid = "Duke1";
 const char* password = "estaunbuendia";
 
-// Backend configuration - Easy to switch between dev and production
-// DEVELOPMENT: Use IP with HTTPS
+// Backend configuration
 const char* backendBaseURL = "https://172.20.10.2:3000";
-// PRODUCTION: Just change to your domain:
-// const char* backendBaseURL = "https://yourdomain.com";
-
 const char* backendUsername = "esp32";
-const char* backendPassword = "97e1f1d29342f21ddd1b2ec8";
+const char* backendPassword = "663c36dd509c03bd04fad8be";
 
 // System states
 enum SystemMode { ONLINE_MODE, OFFLINE_MODE };
@@ -47,27 +43,49 @@ int autoThreshold = 300;
 bool wifiConnected = false;
 String jwtToken = "";
 bool isAuthenticated = false;
+
+// Enhanced timing variables
 unsigned long lastDataSendTime = 0;
-const unsigned long dataSendInterval = 300000; // 5 minutes
+const unsigned long dataSendInterval = 5000; // Increased to 5 seconds
+unsigned long lastDataFetchTime = 0;
+const unsigned long dataFetchInterval = 5000; // Increased to 5 seconds
 unsigned long lastConnectionAttempt = 0;
-const unsigned long connectionRetryInterval = 60000; // 1 minute
+const unsigned long connectionRetryInterval = 30000; // 30 seconds
+unsigned long lastWiFiCheck = 0;
+const unsigned long wifiCheckInterval = 10000; // Check WiFi every 10 seconds
+unsigned long lastMemoryCheck = 0;
+const unsigned long memoryCheckInterval = 60000; // Check memory every minute
+
+// Connection stability
+int failedBackendAttempts = 0;
+const int maxFailedAttempts = 3;
+unsigned long lastSuccessfulCommunication = 0;
 
 // Display
-Adafruit_SSD1306* display = nullptr;
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 bool displayAvailable = false;
 
-// Web server (HTTP only for local access)
+// Web server
 AsyncWebServer server(80);
 
-// Initialize display
+// Initialize display - FIXED: Use static allocation
 bool initializeDisplay() {
   Wire.begin(OLED_SDA, OLED_SCL);
   delay(100);
-  display = new Adafruit_SSD1306(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
   
-  if (display && display->begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+  if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     displayAvailable = true;
     Serial.println("OLED display initialized successfully");
+    
+    // Show startup message
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("Air Purifier");
+    display.println("Starting...");
+    display.display();
+    
     return true;
   } else {
     Serial.println("OLED display initialization failed");
@@ -89,191 +107,218 @@ float calculateEfficiency(float inputPPM, float outputPPM) {
   return ((inputPPM - outputPPM) / inputPPM) * 100.0;
 }
 
-// HTTPS authentication without certificate verification
-bool authenticateBackend() {
-  if (!wifiConnected) {
-    Serial.println("WiFi not connected");
+// Enhanced WiFi connection with retry logic
+bool ensureWiFiConnection() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return true;
+  }
+  
+  Serial.println("WiFi disconnected. Attempting to reconnect...");
+  WiFi.disconnect();
+  delay(1000);
+  
+  WiFi.begin(ssid, password);
+  unsigned long startTime = millis();
+  
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n✓ WiFi reconnected! IP: " + WiFi.localIP().toString());
+    wifiConnected = true;
+    return true;
+  } else {
+    Serial.println("\n✗ WiFi reconnection failed");
+    wifiConnected = false;
+    currentMode = OFFLINE_MODE;
+    return false;
+  }
+}
+
+// Enhanced backend connection check
+bool checkBackendConnection() {
+  if (!ensureWiFiConnection()) {
     return false;
   }
 
   WiFiClientSecure client;
-  
-  // IMPORTANT: Skip certificate verification for development
-  client.setInsecure(); // This allows connection without certificate validation
+  client.setInsecure();
+  client.setTimeout(5000);
   
   HTTPClient http;
-  String serverPath = String(backendBaseURL) + "/api/auth/login";
-  Serial.println("Attempting HTTPS connection to: " + serverPath);
+  http.setReuse(true); // Reuse connection
   
-  // Begin HTTPS connection (insecure for development)
+  String serverPath = String(backendBaseURL) + "/api/health"; // Add a health endpoint
+  
   http.begin(client, serverPath);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("User-Agent", "ESP32-AirPurifier/1.0");
-  http.setTimeout(10000);
+  http.setTimeout(5000);
   
-  String loginData = "{\"username\":\"" + String(backendUsername) + "\",\"password\":\"" + String(backendPassword) + "\"}";
-  Serial.println("Sending HTTPS login request...");
+  int httpResponseCode = http.GET();
+  http.end();
   
-  int httpResponseCode = http.POST(loginData);
-  Serial.println("HTTPS Response code: " + String(httpResponseCode));
+  bool connectionOK = (httpResponseCode == 200 || httpResponseCode == 401);
   
-  if (httpResponseCode > 0) {
-    if (httpResponseCode == 200) {
-      String payload = http.getString();
-      Serial.println("HTTPS Authentication successful");
-      
-      DynamicJsonDocument doc(1024);
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (!error && doc.containsKey("token")) {
-        jwtToken = doc["token"].as<String>();
-        isAuthenticated = true;
-        Serial.println("JWT token received via HTTPS");
-        http.end();
-        return true;
-      } else {
-        Serial.println("JSON parsing failed");
-      }
-    } else {
-      String payload = http.getString();
-      Serial.println("Server response: " + payload);
-    }
+  if (connectionOK) {
+    failedBackendAttempts = 0;
+    lastSuccessfulCommunication = millis();
   } else {
-    Serial.println("HTTPS connection failed: " + String(httpResponseCode));
-    Serial.println("Error: " + http.errorToString(httpResponseCode));
+    failedBackendAttempts++;
+    Serial.println("Backend connection failed. Attempt: " + String(failedBackendAttempts));
   }
   
+  return connectionOK;
+}
+
+// Enhanced authentication with cleanup
+bool authenticateBackend() {
+  if (!ensureWiFiConnection()) {
+    return false;
+  }
+
+  // Clear previous authentication if too many failures
+  if (failedBackendAttempts > maxFailedAttempts) {
+    jwtToken = "";
+    isAuthenticated = false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(5000);
+  
+  HTTPClient http;
+  http.setReuse(true);
+  
+  String serverPath = String(backendBaseURL) + "/api/auth/login";
+  
+  http.begin(client, serverPath);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(5000);
+  
+  String loginData = "{\"username\":\"" + String(backendUsername) + "\",\"password\":\"" + String(backendPassword) + "\"}";
+  
+  int httpResponseCode = http.POST(loginData);
+  String response = http.getString();
   http.end();
+  
+  if (httpResponseCode == 200) {
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, response);
+    
+    if (!error && doc.containsKey("token")) {
+      jwtToken = doc["token"].as<String>();
+      isAuthenticated = true;
+      failedBackendAttempts = 0;
+      lastSuccessfulCommunication = millis();
+      Serial.println("✓ Authentication successful");
+      return true;
+    }
+  }
+  
+  Serial.println("✗ Authentication failed: " + String(httpResponseCode));
+  failedBackendAttempts++;
   return false;
 }
 
-// Send data to backend via HTTPS (insecure for development)
+// Enhanced data sending with memory management
 bool sendDataToBackend() {
   if (!isAuthenticated && !authenticateBackend()) {
-    Serial.println("Failed to authenticate, cannot send data");
     return false;
   }
 
   WiFiClientSecure client;
-  client.setInsecure(); // Skip certificate verification
+  client.setInsecure();
+  client.setTimeout(5000);
   
   HTTPClient http;
+  http.setReuse(true);
+  
   String serverPath = String(backendBaseURL) + "/api/readings";
   
   http.begin(client, serverPath);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + jwtToken);
-  http.addHeader("User-Agent", "ESP32-AirPurifier/1.0");
-  http.setTimeout(10000);
+  http.setTimeout(5000);
   
-  String postData = "{\"device_id\":\"esp32_air_purifier_01\",";
-  postData += "\"input_air_quality\":" + String(input_air_quality) + ",";
-  postData += "\"output_air_quality\":" + String(output_air_quality) + ",";
-  postData += "\"efficiency\":" + String(efficiency) + ",";
-  postData += "\"fan_state\":" + String(fanState ? "true" : "false") + ",";
-  postData += "\"auto_mode\":" + String(autoMode == "ON" ? "true" : "false") + "}";
+  // Use StaticJsonDocument for better memory management
+  StaticJsonDocument<512> doc;
+  doc["device_id"] = "esp32_air_purifier_01";
+  doc["system_mode"] = currentMode == ONLINE_MODE ? "online" : "offline";
+  doc["input_air_quality"] = input_air_quality;
+  doc["output_air_quality"] = output_air_quality;
+  doc["efficiency"] = efficiency;
+  doc["fan_state"] = fanState;
+  doc["auto_mode"] = autoMode == "ON";
   
-  Serial.println("Sending data via HTTPS (insecure mode)...");
+  String postData;
+  serializeJson(doc, postData);
+  
   int httpResponseCode = http.POST(postData);
+  http.end();
   
   if (httpResponseCode == 201) {
-    Serial.println("✓ Data sent to backend successfully via HTTPS");
-    http.end();
+    failedBackendAttempts = 0;
+    lastSuccessfulCommunication = millis();
     return true;
   } else {
-    Serial.println("✗ HTTPS data send failed. Code: " + String(httpResponseCode));
     if (httpResponseCode == 401) {
       jwtToken = "";
       isAuthenticated = false;
-      Serial.println("Token invalid, need reauthentication");
     }
-    http.end();
+    failedBackendAttempts++;
     return false;
   }
 }
 
-// Check basic internet connectivity
-bool checkInternetConnection() {
-  if (WiFi.status() != WL_CONNECTED) {
-    wifiConnected = false;
-    return false;
-  }
-  
-  HTTPClient http;
-  http.setTimeout(5000);
-  
-  // Simple HTTP test (no SSL needed for basic check)
-  if (http.begin("http://www.google.com")) {
-    int responseCode = http.GET();
-    http.end();
-    wifiConnected = (responseCode > 0);
-    return wifiConnected;
-  }
-  
-  http.end();
-  return false;
+// Memory monitoring function
+void checkMemory() {
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("Min free heap: %d bytes\n", ESP.getMinFreeHeap());
+  Serial.printf("Max alloc heap: %d bytes\n", ESP.getMaxAllocHeap());
 }
 
-// HTML processor for local web server
-String processor(const String& var) {
-  if (var == "SYSTEM_MODE") {
-    return currentMode == ONLINE_MODE ? "online" : "offline";
+// Initialize SPIFFS
+bool initializeSPIFFS() {
+  if(!SPIFFS.begin(true)){
+    Serial.println("SPIFFS mount failed");
+    return false;
   }
-  else if (var == "INPUT_AIR_QUALITY") {
-    return String(input_air_quality);
-  }
-  else if (var == "OUTPUT_AIR_QUALITY") {
-    return String(output_air_quality);
-  }
-  else if (var == "EFFICIENCY") {
-    return String(efficiency);
-  }
-  else if (var == "FAN_STATE") {
-    return fanState ? "true" : "false";
-  }
-  else if (var == "AUTO_MODE") {
-    return autoMode;
-  }
-  else if (var == "THRESHOLD_VALUE") {
-    return String(autoThreshold);
-  }
-  return String();
+  return true;
 }
 
 void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println("\n=== Air Purifier System Starting ===");
-  Serial.println("HTTPS Mode: Insecure (Development)");
-  Serial.println("Backend URL: " + String(backendBaseURL));
+  Serial.println("⚡ ENHANCED STABILITY VERSION");
 
   // Initialize hardware
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
-  Serial.println("Relay pin initialized");
 
   // Initialize display
   initializeDisplay();
 
   // Initialize SPIFFS
-  SPIFFS.begin(true);
+  if (!initializeSPIFFS()) {
+    Serial.println("Failed to initialize SPIFFS");
+  }
 
   // Read initial sensor values
   input_air_quality = readAirQuality(MQ135_INPUT_PIN);
   output_air_quality = readAirQuality(MQ135_OUTPUT_PIN);
   efficiency = calculateEfficiency(input_air_quality, output_air_quality);
-  
-  Serial.println("Initial Sensor Readings:");
-  Serial.println("Input: " + String(input_air_quality) + " PPM");
-  Serial.println("Output: " + String(output_air_quality) + " PPM");
-  Serial.println("Efficiency: " + String(efficiency) + "%");
 
-  // Connect to WiFi
+  // Connect to WiFi with enhanced logic
   Serial.println("Connecting to WiFi: " + String(ssid));
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  
   WiFi.begin(ssid, password);
   
   unsigned long wifiStartTime = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiStartTime < 30000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStartTime < 20000) {
     delay(1000);
     Serial.print(".");
   }
@@ -282,53 +327,29 @@ void setup() {
     wifiConnected = true;
     Serial.println("\n✓ WiFi Connected! IP: " + WiFi.localIP().toString());
     
-    // Check internet and authenticate with backend via HTTPS
-    if (checkInternetConnection()) {
-      Serial.println("✓ Internet connection OK");
-      Serial.println("Attempting HTTPS authentication with backend...");
-      
-      if (authenticateBackend()) {
-        currentMode = ONLINE_MODE;
-        Serial.println("✓ Backend authentication successful - ONLINE MODE");
-        Serial.println("✓ Using HTTPS (insecure mode for development)");
-      } else {
-        currentMode = OFFLINE_MODE;
-        Serial.println("✗ Backend authentication failed - OFFLINE MODE");
-      }
+    // Try backend connection but don't block startup
+    if (checkBackendConnection() && authenticateBackend()) {
+      currentMode = ONLINE_MODE;
+      Serial.println("✓ Backend connection established - ONLINE MODE");
     } else {
       currentMode = OFFLINE_MODE;
-      Serial.println("✗ No internet connection - OFFLINE MODE");
+      Serial.println("✗ Backend connection failed - OFFLINE MODE");
     }
   } else {
     currentMode = OFFLINE_MODE;
     Serial.println("✗ WiFi connection failed - OFFLINE MODE");
   }
 
-  // Setup local web server (HTTP only - for local network access)
+  // Web server setup (same as before)
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     if (SPIFFS.exists("/index.html")) {
-      request->send(SPIFFS, "/index.html", "text/html", false, processor);
+      request->send(SPIFFS, "/index.html", "text/html");
     } else {
-      String html = "<html><body><h1>Air Purifier Control Panel</h1>";
-      html += "<p><strong>Mode:</strong> " + String(currentMode == ONLINE_MODE ? "ONLINE (HTTPS)" : "OFFLINE") + "</p>";
-      html += "<p><strong>Backend:</strong> " + String(backendBaseURL) + "</p>";
-      html += "<p><strong>Local IP:</strong> " + WiFi.localIP().toString() + "</p>";
-      html += "<p><strong>Input Air Quality:</strong> " + String(input_air_quality) + " PPM</p>";
-      html += "<p><strong>Output Air Quality:</strong> " + String(output_air_quality) + " PPM</p>";
-      html += "</body></html>";
+      String html = "<html><body><h1>Air Purifier</h1><p>System running</p></body></html>";
       request->send(200, "text/html", html);
     }
   });
 
-  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(SPIFFS, "/style.css", "text/css");
-  });
-
-  server.on("/script.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(SPIFFS, "/script.js", "text/javascript");
-  });
-
-  // API endpoint for local data access
   server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
     String json = "{";
     json += "\"system_mode\":\"" + String(currentMode == ONLINE_MODE ? "online" : "offline") + "\",";
@@ -337,48 +358,16 @@ void setup() {
     json += "\"efficiency\":" + String(efficiency) + ",";
     json += "\"fan\":" + String(fanState) + ",";
     json += "\"auto_mode\":\"" + autoMode + "\",";
-    json += "\"backend_url\":\"" + String(backendBaseURL) + "\"";
+    json += "\"threshold\":" + String(autoThreshold) + ",";
+    json += "\"wifi_status\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+    json += "\"backend_status\":" + String(currentMode == ONLINE_MODE ? "true" : "false");
     json += "}";
     request->send(200, "application/json", json);
   });
 
-  // Control endpoints
-  server.on("/control", HTTP_GET, [](AsyncWebServerRequest *request){
-    if (request->hasParam("fan")) {
-      String newState = request->getParam("fan")->value();
-      fanState = (newState == "on");
-      digitalWrite(RELAY_PIN, fanState ? HIGH : LOW);
-      autoMode = "OFF";
-      Serial.println("Fan " + String(fanState ? "ON" : "OFF") + " (manual control)");
-    }
-    if (request->hasParam("auto")) {
-      autoMode = request->getParam("auto")->value();
-      Serial.println("Auto mode: " + autoMode);
-    }
-    if (request->hasParam("threshold")) {
-      autoThreshold = request->getParam("threshold")->value().toInt();
-      Serial.println("Threshold: " + String(autoThreshold));
-    }
-    request->send(200, "text/plain", "OK");
-  });
-
   server.begin();
-  Serial.println("✓ Local web server started (HTTP on port 80)");
-  Serial.println("✓ Access via: http://" + WiFi.localIP().toString());
-  Serial.println("=== System Ready ===");
-
-  // Display initial status
-  if (displayAvailable) {
-    display->clearDisplay();
-    display->setTextSize(1);
-    display->setCursor(0, 0);
-    display->println("Air Purifier Ready");
-    display->print("Mode: ");
-    display->println(currentMode == ONLINE_MODE ? "ONLINE" : "OFFLINE");
-    display->print("Backend: ");
-    display->println(backendBaseURL);
-    display->display();
-  }
+  Serial.println("✓ Web server started");
+  checkMemory(); // Initial memory check
 }
 
 void loop() {
@@ -392,39 +381,86 @@ void loop() {
     if (input_air_quality > autoThreshold) {
       digitalWrite(RELAY_PIN, HIGH);
       fanState = true;
-    } else if (input_air_quality < (autoThreshold - 100)) {
+    } else if (input_air_quality < (autoThreshold - 50)) {
       digitalWrite(RELAY_PIN, LOW);
       fanState = false;
     }
   }
 
-  // Try to reconnect to backend periodically
-  if (millis() - lastConnectionAttempt > connectionRetryInterval) {
-    if (WiFi.status() == WL_CONNECTED && checkInternetConnection()) {
-      if (authenticateBackend()) {
-        currentMode = ONLINE_MODE;
-        Serial.println("✓ Reconnected to backend via HTTPS");
+  // Enhanced connection management
+  unsigned long currentTime = millis();
+
+  // Check WiFi status regularly
+  if (currentTime - lastWiFiCheck > wifiCheckInterval) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi connection lost - attempting reconnect");
+      ensureWiFiConnection();
+    }
+    lastWiFiCheck = currentTime;
+  }
+
+  // Check memory usage
+  if (currentTime - lastMemoryCheck > memoryCheckInterval) {
+    checkMemory();
+    lastMemoryCheck = currentTime;
+  }
+
+  // Backend communication logic
+  if (currentMode == ONLINE_MODE) {
+    // If too many failures, switch to offline mode
+    if (failedBackendAttempts > maxFailedAttempts) {
+      currentMode = OFFLINE_MODE;
+      Serial.println("Too many backend failures - Switching to OFFLINE MODE");
+    }
+    // If no successful communication for a long time, try reauthentication
+    else if (currentTime - lastSuccessfulCommunication > 120000) { // 2 minutes
+      Serial.println("No successful communication for 2 minutes - reauthenticating");
+      isAuthenticated = false;
+    }
+
+    // Send data to backend
+    if (currentTime - lastDataSendTime > dataSendInterval) {
+      if (sendDataToBackend()) {
+        lastDataSendTime = currentTime;
+        Serial.println("✓ Data sent to backend");
       } else {
-        currentMode = OFFLINE_MODE;
-        Serial.println("✗ Backend unavailable");
+        Serial.println("✗ Failed to send data to backend");
       }
-    } else {
-      currentMode = OFFLINE_MODE;
-      wifiConnected = false;
     }
-    lastConnectionAttempt = millis();
-  }
-
-  // Send data to backend via HTTPS if online
-  if (currentMode == ONLINE_MODE && millis() - lastDataSendTime > dataSendInterval) {
-    if (sendDataToBackend()) {
-      lastDataSendTime = millis();
-      Serial.println("✓ Data sent to cloud database via HTTPS");
-    } else {
-      currentMode = OFFLINE_MODE;
-      Serial.println("✗ HTTPS data send failed");
+  } else { // OFFLINE MODE - try to reconnect periodically
+    if (currentTime - lastConnectionAttempt > connectionRetryInterval) {
+      Serial.println("Attempting to reconnect to backend...");
+      if (ensureWiFiConnection() && checkBackendConnection() && authenticateBackend()) {
+        currentMode = ONLINE_MODE;
+        failedBackendAttempts = 0;
+        Serial.println("✓ Reconnected to backend - ONLINE MODE");
+      }
+      lastConnectionAttempt = currentTime;
     }
   }
 
-  delay(2000);
+  // Update display
+  if (displayAvailable) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("AIR PURIFIER");
+    display.print("Mode: ");
+    display.println(currentMode == ONLINE_MODE ? "ONLINE" : "OFFLINE");
+    display.print("In: ");
+    display.print(input_air_quality, 0);
+    display.println(" PPM");
+    display.print("Out: ");
+    display.print(output_air_quality, 0);
+    display.println(" PPM");
+    display.print("Eff: ");
+    display.print(efficiency, 0);
+    display.println("%");
+    display.print("Fan: ");
+    display.println(fanState ? "ON" : "OFF");
+    display.print("WiFi: ");
+    display.println(WiFi.status() == WL_CONNECTED ? "OK" : "OFF");
+    display.display();
+  }
+
+  delay(1000); // 1 second delay for stability
 }
