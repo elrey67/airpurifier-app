@@ -8,212 +8,41 @@ let autoMode = "ON";
 let threshold = 300;
 let historyData = [];
 let lastUpdateTime = new Date();
-let reconnectAttempts = 0;
-const maxReconnectAttempts = 5;
-
-// User authentication state
-let currentUser = null;
-let isLoggedIn = false;
-let dataUpdateInterval = null;
+let isUpdating = false; // Prevent overlapping updates
+let lastSuccessfulUpdate = null;
+let connectionRetries = 0;
+let lastConnectionStatus = '';
 
 // Initialize the page
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded, initializing login system...');
-    initializeLoginSystem();
-    checkAuthentication();
+    console.log('DOM loaded, initializing air purifier dashboard...');
+    initializeEventListeners();
+    updateConnectionStatus('reconnecting', 'Checking system mode...');
     
     // Show server URL in footer
     const serverUrlElement = document.getElementById('server-url');
     if (serverUrlElement) {
         serverUrlElement.textContent = window.location.hostname;
     }
-});
-
-function initializeLoginSystem() {
-    const loginForm = document.getElementById('login-form');
-    const logoutLink = document.getElementById('logout-link');
-    const adminLink = document.getElementById('admin-link');
-
-    // Login form submission
-    loginForm.addEventListener('submit', function(e) {
-        e.preventDefault();
-        const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
-        
-        authenticateUser(username, password);
-    });
-
-    // Logout functionality
-    if (logoutLink) {
-        logoutLink.addEventListener('click', function(e) {
-            e.preventDefault();
-            logoutUser();
-        });
-    }
-
-    // Admin panel link
-    if (adminLink) {
-        adminLink.addEventListener('click', function(e) {
-            e.preventDefault();
-            showAdminPanel();
-        });
-    }
-}
-
-function authenticateUser(username, password) {
-    // Simple authentication
-    const validUsers = {
-        'admin': 'admin123',
-        'user': 'user123',
-        'operator': 'operator123'
-    };
-
-    const errorElement = document.getElementById('login-error');
-
-    if (validUsers[username] && validUsers[username] === password) {
-        currentUser = username;
-        isLoggedIn = true;
-        
-        // Store login state
-        localStorage.setItem('isLoggedIn', 'true');
-        localStorage.setItem('username', username);
-        
-        // Switch to dashboard
-        showDashboard();
-        
-        // Clear form and hide error
-        document.getElementById('login-form').reset();
-        errorElement.style.display = 'none';
-        
-        console.log('User authenticated:', username);
-    } else {
-        errorElement.textContent = 'Invalid username or password';
-        errorElement.style.display = 'block';
-        
-        // Shake animation for error
-        const loginCard = document.querySelector('.login-card');
-        loginCard.style.animation = 'shake 0.5s ease-in-out';
-        setTimeout(() => {
-            loginCard.style.animation = '';
-        }, 500);
-    }
-}
-
-function checkAuthentication() {
-    const storedLogin = localStorage.getItem('isLoggedIn');
-    const storedUsername = localStorage.getItem('username');
     
-    if (storedLogin === 'true' && storedUsername) {
-        currentUser = storedUsername;
-        isLoggedIn = true;
-        showDashboard();
-    } else {
-        showLoginPage();
-    }
-}
-
-function showLoginPage() {
-    document.getElementById('login-page').style.display = 'flex';
-    document.getElementById('dashboard').style.display = 'none';
-    document.body.className = 'login-page';
-    
-    // Stop data updates if running
-    if (dataUpdateInterval) {
-        clearInterval(dataUpdateInterval);
-        dataUpdateInterval = null;
-    }
-}
-
-function showDashboard() {
-    document.getElementById('login-page').style.display = 'none';
-    document.getElementById('dashboard').style.display = 'block';
-    document.body.className = '';
-    
-    // Update user interface
-    updateUserInterface();
-    
-    // Initialize dashboard functionality
-    initializeDashboard();
-    
-    // Start data updates
-    startDataUpdates();
-}
-
-function updateUserInterface() {
-    const welcomeElement = document.getElementById('username-display');
-    if (welcomeElement && currentUser) {
-        welcomeElement.textContent = currentUser;
-    }
-}
-
-function initializeDashboard() {
-    console.log('Initializing dashboard...');
-    initializeEventListeners();
-    
-    // Enhanced initial status check
-    updateConnectionStatus('reconnecting', 'Connecting to device and database...');
-    
-    // Perform initial system check with retry logic
-    performInitialSystemCheck();
-}
-
-function performInitialSystemCheck() {
-    let attempts = 0;
-    const maxAttempts = 3;
-    
-    function attemptCheck() {
-        attempts++;
-        console.log(`Initial system check attempt ${attempts}/${maxAttempts}`);
-        
+    // Initial update
+    setTimeout(() => {
         checkSystemMode();
-        
-        // If still reconnecting after 5 seconds, try again
-        setTimeout(() => {
-            const statusElement = document.getElementById('connection-status');
-            if (statusElement && statusElement.classList.contains('reconnecting') && attempts < maxAttempts) {
-                attemptCheck();
-            }
-        }, 5000);
-    }
+    }, 100);
     
-    attemptCheck();
-}
-
-function startDataUpdates() {
-    // Clear existing interval if any
-    if (dataUpdateInterval) {
-        clearInterval(dataUpdateInterval);
-    }
-    
-    // Start new interval for real-time updates
-    dataUpdateInterval = setInterval(updateData, 2000);
-    console.log('Data updates started');
-}
-
-function logoutUser() {
-    currentUser = null;
-    isLoggedIn = false;
-    localStorage.removeItem('isLoggedIn');
-    localStorage.removeItem('username');
-    
-    // Stop data updates
-    if (dataUpdateInterval) {
-        clearInterval(dataUpdateInterval);
-        dataUpdateInterval = null;
-    }
-    
-    // Show login page
-    showLoginPage();
-    console.log('User logged out');
-}
-
-function showAdminPanel() {
-    alert('Admin panel would open here. User: ' + currentUser);
-}
+    // Set up periodic updates
+    setInterval(updateData, 2000); // Update every 2 seconds
+});
 
 function initializeEventListeners() {
     console.log('Initializing event listeners...');
 
+    const sensorGrid = document.querySelector('.sensors-grid');
+    console.log('Sensor grid element:', sensorGrid);
+    
+    const sensorCards = document.querySelectorAll('.sensor-card');
+    console.log('Sensor cards found:', sensorCards.length);
+    
     // Control event listeners
     const toggleFanBtn = document.getElementById('toggle-fan');
     const toggleModeBtn = document.getElementById('toggle-mode');
@@ -261,156 +90,189 @@ function initializeEventListeners() {
     });
 }
 
-// FIXED: Use correct API endpoint
+// Get the device ID (you may need to set this based on your setup)
+function getCurrentDeviceId() {
+    // Use the same device ID as your ESP32 version
+    return 'esp32_air_purifier_01';
+}
+
 function checkSystemMode() {
-    if (!isLoggedIn) return;
+    console.log('Checking system mode via database API...');
+    const deviceId = getCurrentDeviceId();
+    const token = localStorage.getItem('authToken');
     
-    console.log('Checking system mode...');
-    fetch('/api/data')  // Changed from '/data' to ''
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
+    fetch(`/api/device-status?device_id=${deviceId}`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        console.log('System status received from database:', data);
+        
+        // Use the same status detection logic as the ESP32 version
+       systemMode = data.status || data.system_mode || 'offline';
+        
+        console.log('System mode determined:', systemMode);
+        
+        // Set initial connection status
+        const initialStatus = systemMode === 'online' ? 'connected' : 'disconnected';
+        const initialMessage = systemMode === 'online' ? 
+            'Device online - Real-time data' : 
+            'Device offline - Using cached data';
             
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-                return response.json();
-            } else {
-                return response.text().then(text => {
-                    console.log('Non-JSON response received:', text.substring(0, 200));
-                    throw new Error('Expected JSON but got: ' + contentType);
-                });
-            }
-        })
-        .then(data => {
-            console.log('Data received from backend:', data);
-            
-            // Handle both online and offline device states
-            if (data.system_mode === 'error') {
-                // Backend error
-                systemMode = 'offline';
-                updateConnectionStatus('error', 'Backend configuration error');
-            } else {
-                systemMode = data.system_mode || 'offline';
-                updateFromBackendData(data);
-                
-                // Determine connection status
-                const isDeviceConnected = data.input_air_quality !== undefined && data.input_air_quality !== null;
-                const isDeviceOnline = systemMode === 'online';
-                
-                let status, message;
-                
-                if (isDeviceConnected) {
-                    if (isDeviceOnline) {
-                        status = 'connected';
-                        message = 'Connected to device via cloud database';
-                    } else {
-                        status = 'disconnected';
-                        message = 'Device offline - Using last known data';
-                    }
-                } else {
-                    status = 'error';
-                    message = 'No device data available';
-                }
-                
-                updateConnectionStatus(status, message);
-                reconnectAttempts = 0;
-            }
-        })
-        .catch(error => {
-            console.error('Error checking system mode:', error);
-            systemMode = 'offline';
-            handleConnectionError(error);
-        });
+        lastConnectionStatus = `${initialStatus}:${systemMode}`;
+        updateConnectionStatus(initialStatus, initialMessage);
+    })
+    .catch(error => {
+        console.error('Error checking system mode:', error);
+        systemMode = 'offline';
+        lastConnectionStatus = 'error:offline';
+        updateConnectionStatus('error', 'Failed to connect to database');
+    });
 }
 
-// FIXED: Use correct API endpoint
 function updateData() {
-    if (!isLoggedIn) return;
-    
-    fetch('/api/data')  // Changed from '/data' to '/api/devices/data'
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-                return response.json();
-            } else {
-                return response.text().then(text => {
-                    console.log('Non-JSON response received:', text.substring(0, 200));
-                    throw new Error('Expected JSON but got: ' + contentType);
-                });
-            }
-        })
-        .then(data => {
-            console.log('Data received from backend:', data);
-            
-            if (data.system_mode === 'error') {
-                systemMode = 'offline';
-                updateConnectionStatus('error', 'Backend configuration error');
-                return;
-            }
-            
-            systemMode = data.system_mode || 'offline';
-            updateFromBackendData(data);
-            
-            // Enhanced connection status detection
-            const isDeviceConnected = data.input_air_quality !== undefined && data.input_air_quality !== null;
-            const isDeviceOnline = systemMode === 'online';
-            const hasValidData = data.input_air_quality > 0 || data.output_air_quality > 0;
-            
-            let status, message;
-            
-            if (!isDeviceConnected) {
-                status = 'error';
-                message = 'No device data available';
-            } else if (isDeviceOnline) {
-                status = 'connected';
-                message = 'Device online - Real-time data';
-            } else if (hasValidData) {
-                status = 'disconnected';
-                message = 'Device offline - Using cached data';
-            } else {
-                status = 'error';
-                message = 'Device configuration error';
-            }
-            
-            updateConnectionStatus(status, message);
-            reconnectAttempts = 0;
-        })
-        .catch(error => {
-            console.error('Error fetching data:', error);
-            handleConnectionError(error);
-        });
-}
-
-function handleConnectionError(error) {
-    systemMode = 'offline';
-    
-    if (error.message.includes('JSON')) {
-        updateConnectionStatus('error', 'Device configuration error - Check ESP32 server');
-    } else {
-        updateConnectionStatus('error', 'Connection error - Device may be offline');
+    // Prevent overlapping updates
+    if (isUpdating) {
+        console.log('Data update skipped - previous update still in progress');
+        return;
     }
     
-    attemptReconnect();
+    isUpdating = true;
+    const deviceId = getCurrentDeviceId();
+    const token = localStorage.getItem('authToken');
+    console.log('Fetching data from database API for device:', deviceId);
+    
+    fetch(`/api/latest-data?device_id=${deviceId}`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        console.log('Data received from database:', data);
+        
+        if (!data || data.error) {
+            throw new Error(data?.error || 'Invalid data received');
+        }
+        
+        // Use the same status detection logic
+        if (data.status) {
+            systemMode = data.status;
+        } else if (data.is_online !== undefined) {
+            systemMode = data.is_online ? 'online' : 'offline';
+        } else {
+            systemMode = 'offline';
+        }
+        
+        updateFromBackendData(data);
+        lastSuccessfulUpdate = Date.now();
+        connectionRetries = 0; // Reset retries on successful update
+        
+        // Update connection status with improved logic
+        updateConnectionStatusIfChanged(data);
+    })
+    .catch(error => {
+        console.error('Error fetching data:', error);
+        connectionRetries++;
+        
+        // Only show error status after multiple failures
+        if (connectionRetries >= 3) {
+            // Don't change systemMode to offline immediately - keep previous state
+            updateConnectionStatus('error', `Connection error - ${error.message}`);
+        } else {
+            console.log(`Connection retry ${connectionRetries}/3`);
+            // Maintain current status during retries
+            updateConnectionStatus('reconnecting', `Reconnecting... (attempt ${connectionRetries}/3)`);
+        }
+    })
+    .finally(() => {
+        isUpdating = false;
+    });
 }
 
-function attemptReconnect() {
-    if (reconnectAttempts < maxReconnectAttempts) {
-        reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
-        
-        console.log(`Attempting reconnect in ${delay}ms (attempt ${reconnectAttempts})`);
-        updateConnectionStatus('reconnecting', `Reconnecting... Attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
-        
-        setTimeout(() => {
-            checkSystemMode();
-        }, delay);
+// Improved function to prevent flickering connection status
+function updateConnectionStatusIfChanged(data) {
+    // Fix timestamp parsing - handle different formats
+    let lastUpdate;
+    const timestamp = data.timestamp || data.last_updated;
+    
+    if (timestamp) {
+        // Handle various timestamp formats
+        if (typeof timestamp === 'string') {
+            // Replace space with 'T' if needed for proper ISO format
+            const isoString = timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T');
+            lastUpdate = new Date(isoString);
+        } else {
+            lastUpdate = new Date(timestamp);
+        }
     } else {
-        updateConnectionStatus('failed', 'Failed to connect to device. Please check ESP32 connection.');
+        lastUpdate = new Date(); // Use current time if no timestamp
+    }
+    
+    // Check if the parsed date is valid
+    if (isNaN(lastUpdate.getTime())) {
+        console.warn('Invalid timestamp received:', timestamp);
+        lastUpdate = new Date(); // Fallback to current time
+    }
+    
+    const minutesSinceUpdate = (new Date() - lastUpdate) / (1000 * 60);
+    
+    console.log('Timestamp debugging:', {
+        rawTimestamp: timestamp,
+        parsedDate: lastUpdate,
+        minutesSinceUpdate: minutesSinceUpdate,
+        systemMode: systemMode
+    });
+    
+    let status, message;
+    
+    // PRIMARY LOGIC: Trust the backend's status first
+    if (systemMode === 'online') {
+        // Device is online according to backend
+        if (minutesSinceUpdate < 10) { // Increased to 10 minutes for stability
+            status = 'connected';
+            message = 'Device online - Real-time data';
+        } else if (minutesSinceUpdate < 30) { // New intermediate state
+            status = 'connected';
+            message = `Device online - Data delayed (${Math.round(minutesSinceUpdate)} min)`;
+        } else {
+            // If data is very old but backend says online, show warning instead of error
+             status = 'connected';
+            message = 'Device online - Real-time data';
+        }
+    } else {
+        // Device is offline according to backend
+        if (minutesSinceUpdate < 60) {
+            status = 'disconnected';
+            message = `Device offline - Using recent data (${Math.round(minutesSinceUpdate)} min old)`;
+        } else {
+            status = 'error';
+            message = 'Device offline - Data outdated';
+        }
+    }
+    
+    // Only update if status actually changed
+    const newStatusString = `${status}:${systemMode}:${Math.round(minutesSinceUpdate)}`;
+    if (lastConnectionStatus !== newStatusString) {
+        lastConnectionStatus = newStatusString;
+        updateConnectionStatus(status, message);
+        console.log('Connection status changed:', { status, message, systemMode, minutesSinceUpdate });
     }
 }
 
@@ -423,136 +285,70 @@ function updateConnectionStatus(status, message) {
         return;
     }
     
-    // Clear all status classes
     statusElement.className = 'connection-status';
     statusElement.classList.add(status);
     statusText.textContent = message;
     
-    // Update icon and detailed status
+    // Update icon
     const icon = statusElement.querySelector('i');
     if (icon) {
         switch(status) {
             case 'connected':
                 icon.className = 'fas fa-cloud';
-                statusElement.title = 'Device is online and sending real-time data';
                 break;
             case 'disconnected':
                 icon.className = 'fas fa-database';
-                statusElement.title = 'Device is offline - showing last known data';
                 break;
             case 'reconnecting':
                 icon.className = 'fas fa-sync-alt fa-spin';
-                statusElement.title = 'Attempting to reconnect to device';
                 break;
             case 'error':
-                icon.className = 'fas fa-exclamation-triangle';
-                statusElement.title = 'Connection error - check device configuration';
-                break;
             case 'failed':
-                icon.className = 'fas fa-times-circle';
-                statusElement.title = 'Failed to connect to device';
+                icon.className = 'fas fa-exclamation-triangle';
                 break;
             default:
                 icon.className = 'fas fa-circle';
         }
     }
     
-    // Update system mode indicator in status bar with more detail
+    // Update mode indicator in status bar
     const wifiStatusElement = document.getElementById('wifi-status');
     if (wifiStatusElement) {
-        if (status === 'connected') {
-            wifiStatusElement.innerHTML = "<i class='fas fa-cloud'></i> Online";
-            wifiStatusElement.title = 'Device connected to cloud';
-        } else if (status === 'disconnected') {
-            wifiStatusElement.innerHTML = "<i class='fas fa-database'></i> Offline";
-            wifiStatusElement.title = 'Device offline - using cached data';
-        } else {
-            wifiStatusElement.innerHTML = "<i class='fas fa-exclamation-triangle'></i> Error";
-            wifiStatusElement.title = 'Connection error';
-        }
+        wifiStatusElement.innerHTML = systemMode === 'online' 
+            ? "<i class='fas fa-cloud'></i> Online" 
+            : "<i class='fas fa-database'></i> Offline";
     }
     
-    // Update status item styling
-    const systemStatusItem = document.getElementById('system-status-item');
-    if (systemStatusItem) {
-        systemStatusItem.className = 'status-item';
-        if (status === 'connected') systemStatusItem.classList.add('online');
-        else if (status === 'disconnected') systemStatusItem.classList.add('offline');
-        else systemStatusItem.classList.add('error');
-    }
-    
-    console.log(`Connection status updated: ${status} - ${message}`);
+    console.log('Connection status updated:', { status, message, systemMode });
 }
 
 function updateFromBackendData(data) {
     console.log('Updating from backend data:', data);
     
-    // Extract values from backend data with proper fallbacks
-    inputAirQuality = parseFloat(data.input_air_quality) || 0;
-    outputAirQuality = parseFloat(data.output_air_quality) || 0;
-    efficiency = parseFloat(data.efficiency) || 0;
-    fanState = Boolean(data.fan);
-    autoMode = data.auto_mode || "ON";
-    threshold = parseInt(data.threshold) || 300;
+    // Use the main 'status' field instead of complex logic
+    systemMode = data.status || data.system_mode || 'offline';
     
-    console.log(`Parsed values - Input: ${inputAirQuality}, Output: ${outputAirQuality}, Efficiency: ${efficiency}, Fan: ${fanState}, Mode: ${autoMode}, Threshold: ${threshold}`);
+    // Extract values from database data structure
+    const deviceData = data.data || data;
     
-    // Update threshold slider if data contains threshold
-    if (data.threshold) {
-        const thresholdSlider = document.getElementById('threshold');
-        const thresholdValue = document.getElementById('threshold-value');
-        if (thresholdSlider && thresholdValue) {
-            thresholdSlider.value = threshold;
-            thresholdValue.textContent = threshold;
-        }
-    }
+    inputAirQuality = parseFloat(deviceData.input_air_quality) || 0;
+    outputAirQuality = parseFloat(deviceData.output_air_quality) || 0;
+    efficiency = parseFloat(deviceData.efficiency) || 0;
+    fanState = Boolean(deviceData.fan_state);
+    autoMode = deviceData.auto_mode === true || deviceData.auto_mode === 1 ? "ON" : "OFF";
+    
+    console.log('Processed values:', {
+        inputAirQuality,
+        outputAirQuality,
+        efficiency,
+        fanState,
+        autoMode,
+        systemMode
+    });
     
     updateAllDisplays();
     updateButtonStates();
-    
-    // Only add to history if we have valid data (not zeros or errors)
-    if (inputAirQuality > 0 || outputAirQuality > 0) {
-        addToHistory({
-            timestamp: new Date(),
-            inputQuality: inputAirQuality,
-            outputQuality: outputAirQuality,
-            efficiency: efficiency,
-            fanState: fanState,
-            autoMode: autoMode,
-            systemMode: systemMode,
-            dataSource: systemMode === 'online' ? 'live' : 'cached'
-        });
-    }
-
-    lastUpdateTime = new Date();
     updateLastUpdated();
-    
-    // Update data source indicator in UI
-    updateDataSourceIndicator();
-}
-
-function updateDataSourceIndicator() {
-    const lastUpdatedElement = document.getElementById('last-updated-full');
-    if (lastUpdatedElement) {
-        const now = new Date();
-        const diffSec = Math.floor((now - lastUpdateTime) / 1000);
-        
-        let timeText;
-        if (diffSec < 10) {
-            timeText = 'Just now';
-        } else if (diffSec < 60) {
-            timeText = `${diffSec} seconds ago`;
-        } else {
-            timeText = `${Math.floor(diffSec / 60)} minutes ago`;
-        }
-        
-        const sourceIcon = systemMode === 'online' ? '🌐' : '💾';
-        const sourceText = systemMode === 'online' ? 'Live Data' : 'Cached Data';
-        
-        lastUpdatedElement.textContent = 
-            `Last updated: ${lastUpdateTime.toLocaleTimeString()} (${timeText}) | ` +
-            `Mode: ${systemMode.toUpperCase()} | Source: ${sourceIcon} ${sourceText}`;
-    }
 }
 
 function updateAllDisplays() {
@@ -744,10 +540,21 @@ function updateLastUpdated() {
 
     const lastUpdatedElement = document.getElementById('last-updated-full');
     if (lastUpdatedElement) {
-        lastUpdatedElement.textContent = `Last updated: ${lastUpdateTime.toLocaleTimeString()} (${displayText}) | Mode: ${systemMode.toUpperCase()}`;
+        const sourceIcon = systemMode === 'online' ? '🌐' : '💾';
+        const sourceText = systemMode === 'online' ? 'Live Data' : 'Cached Data';
+        
+        lastUpdatedElement.textContent = 
+            `Last updated: ${lastUpdateTime.toLocaleTimeString()} (${displayText}) | ` +
+            `Mode: ${systemMode.toUpperCase()} | Source: ${sourceIcon} ${sourceText}`;
     }
     
     lastUpdateTime = now;
+    
+    console.log('Last updated display refreshed', { 
+        systemMode, 
+        displayText, 
+        lastUpdateTime: lastUpdateTime.toLocaleTimeString() 
+    });
 }
 
 function toggleFan() {
@@ -790,20 +597,22 @@ function updateThreshold(e) {
     console.log('Threshold updated to:', threshold);
 }
 
-// FIXED: Use correct API endpoint for commands
 function sendCommand(command, value) {
-    console.log(`Sending command: ${command}=${value}`);
+    const deviceId = getCurrentDeviceId();
+    const token = localStorage.getItem('authToken');
+    console.log('Sending command via database API:', { command, value, deviceId });
     
-    // Use the correct API endpoint
-    fetch('/api/devices/control', {  // Changed from '/api/control' to '/api/devices/control'
+    fetch('/api/command', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
         },
+        credentials: 'include',
         body: JSON.stringify({
             command: command,
             value: value,
-            device_id: 'esp32_air_purifier_01'
+            device_id: deviceId
         })
     })
     .then(response => {
@@ -813,39 +622,47 @@ function sendCommand(command, value) {
         return response.json();
     })
     .then(data => {
-        console.log('Command sent successfully:', data);
-        
-        // Show success feedback
+        console.log('Command sent successfully via database API:', data);
         showCommandFeedback('Command sent successfully', 'success');
     })
     .catch(error => {
-        console.error('Error sending command:', error);
-        
-        // Show error feedback
+        console.error('Error sending command via database API:', error);
         showCommandFeedback('Command failed - device may be offline', 'error');
     });
 }
 
 function showCommandFeedback(message, type) {
-    // Create or update a feedback element
+    console.log('Showing command feedback:', { message, type });
+    
     let feedbackElement = document.getElementById('command-feedback');
     if (!feedbackElement) {
         feedbackElement = document.createElement('div');
         feedbackElement.id = 'command-feedback';
+        feedbackElement.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 5px;
+            color: white;
+            z-index: 10000;
+            font-weight: bold;
+        `;
         document.body.appendChild(feedbackElement);
     }
     
     feedbackElement.textContent = message;
-    feedbackElement.style.background = type === 'success' ? 'var(--success)' : 'var(--danger)';
+    feedbackElement.style.background = 
+        type === 'success' ? '#28a745' : 
+        type === 'warning' ? '#ffc107' : '#dc3545';
     feedbackElement.style.display = 'block';
     
-    // Auto-hide after 3 seconds
     setTimeout(() => {
         feedbackElement.style.display = 'none';
     }, 3000);
 }
 
-// History and statistics functions
+// History and statistics functions (remain the same)
 function addToHistory(data) {
     historyData.unshift(data);
     if (historyData.length > 50) {
@@ -983,14 +800,3 @@ function updateValueColorElement(element, value) {
 function formatTime(date) {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
-
-// Add shake animation for login errors
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes shake {
-        0%, 100% { transform: translateX(0); }
-        25% { transform: translateX(-5px); }
-        75% { transform: translateX(5px); }
-    }
-`;
-document.head.appendChild(style);

@@ -1,74 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
+< <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Air Purifier Control - Login</title>
+  <title>Air Purifier Dashboard</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="stylesheet" type="text/css" href="style.css">
-</head>
-<body class="login-page">
-  <!-- Login Page -->
-  <div id="login-page" class="login-container">
-    <div class="login-card">
-      <div class="login-header">
-        <i class="fas fa-wind"></i>
-        <h1>Air Purifier Control</h1>
-        <p>Dual Sensor Monitoring System</p>
+  <link rel="stylesheet" href="assets/css/main.css">
+  <link rel="stylesheet" href="assets/css/dashboard.css">
+
+  </head>
+
+  <body>
+
+    <!-- Navigation -->
+    <nav class="navbar">
+      <div class="nav-brand">
+        <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
+        <span id="current-device">Device: <span id="device-name-display">Loading...</span></span>
       </div>
-      
-      <form id="login-form" class="login-form">
-        <div class="form-group">
-          <label for="username"><i class="fas fa-user"></i> Username</label>
-          <input type="text" id="username" name="username" placeholder="Enter your username" required>
-        </div>
-        
-        <div class="form-group">
-          <label for="password"><i class="fas fa-lock"></i> Password</label>
-          <input type="password" id="password" name="password" placeholder="Enter your password" required>
-        </div>
-        
-        <button type="submit" class="login-btn">
-          <i class="fas fa-sign-in-alt"></i> Sign In
-        </button>
-        
-        <div id="login-error" class="error-message"></div>
-      </form>
-      
-      <div class="login-footer">
-        <p>Default credentials: admin / admin123</p>
+      <div class="nav-menu">
+        <a href="devices/" class="btn btn-primary">
+          <i class="fas fa-list"></i> Switch Device
+        </a>
+        <a href="#" class="btn btn-danger" id="logout-btn">
+          <i class="fas fa-sign-out-alt"></i> Logout
+        </a>
+      </div>
+    </nav>
+
+    <!-- Main Dashboard (Hidden until login) -->
+
+    <div class="header-content">
+      <h2>Dual Sensor Air Purifier Monitoring System</h2>
+      <p>Real-time monitoring and control with dual sensor feedback</p>
+      <div class="connection-status" id="connection-status">
+        <i class="fas fa-circle"></i> <span id="connection-text">Connecting to device...</span>
       </div>
     </div>
-  </div>
-
-  <!-- Main Dashboard (Hidden until login) -->
-  <div id="dashboard" class="dashboard" style="display: none;">
-    <!-- Main Header -->
-    <header>
-      <nav class="navbar">
-        <div class="nav-brand">
-          <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
-        </div>
-        <div class="nav-menu" id="nav-menu">
-          <div class="nav-welcome" id="nav-welcome">
-            Welcome, <span id="username-display">Guest</span>
-          </div>
-          <a href="#" class="nav-link" id="admin-link">
-            <i class="fas fa-cog"></i> Admin Panel
-          </a>
-          <a href="#" class="nav-link" id="logout-link">
-            <i class="fas fa-sign-out-alt"></i> Logout
-          </a>
-        </div>
-      </nav>
-
-      <div class="header-content">
-        <h2>Dual Sensor Air Purifier Monitoring System</h2>
-        <p>Real-time monitoring and control with dual sensor feedback</p>
-        <div class="connection-status" id="connection-status">
-          <i class="fas fa-circle"></i> <span id="connection-text">Connecting to device...</span>
-        </div>
-      </div>
     </header>
 
     <div class="container">
@@ -259,13 +226,24 @@
       </div>
     </div>
 
+    <!-- Add this to your dashboard HTML -->
+<div class="control-card">
+    <div class="control-title">
+        <i class="fas fa-key"></i> Device Credentials
+    </div>
+    <div id="device-credentials-panel">
+        <div class="loading">Loading credentials...</div>
+    </div>
+</div>
+
     <div class="last-updated" id="last-updated-full"></div>
 
     <footer>
       <p>Air Purifier System | © 2025 | <span id="server-url"></span></p>
     </footer>
-  </div>
+    </div>
 
-  <script src="script.js"></script>
-</body>
+    <script src="assets/js/dashboard.js"></script>
+  </body>
+
 </html>

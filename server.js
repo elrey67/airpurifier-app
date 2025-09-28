@@ -14,6 +14,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '172.20.10.3';
 
+const deviceController = require('./controllers/deviceController');
+
 // SSL certificate configuration
 const sslOptions = {
     key: fs.readFileSync(path.join(__dirname, 'server.key')),
@@ -50,7 +52,9 @@ app.use(cors({
     'https://172.20.10.2:3000/script.js',
     'https://172.20.10.2:3000/style.css',
     'https://172.20.10.2:3000/admin/admin.js',
-    'https://172.20.10.2:3000/admin/admin.css'
+    'https://172.20.10.2:3000/admin/admin.css',
+        'http://172.20.10.3', // ADD THIS LINE
+    'https://172.20.10.3' // ADD THIS LINE FOR HTTPS
   ],
   credentials: true
 }));
@@ -137,6 +141,9 @@ app.get('*', (req, res, next) => {
   }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+deviceController.startDeviceMonitoring();
+logger.info('Device monitoring service initialized');
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {

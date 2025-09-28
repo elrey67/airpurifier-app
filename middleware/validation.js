@@ -80,6 +80,36 @@ exports.validateDevice = [
     .withMessage('Location must be less than 100 characters')
 ];
 
+
+// Device registration validation
+exports.validateDeviceRegistration = [
+  body('name')
+    .notEmpty()
+    .withMessage('Device name is required')
+    .isLength({ max: 100 })
+    .withMessage('Device name must be less than 100 characters'),
+  
+  body('location')
+    .notEmpty()
+    .withMessage('Location is required')
+    .isLength({ max: 100 })
+    .withMessage('Location must be less than 100 characters'),
+  
+  body('username')
+    .notEmpty()
+    .withMessage('Username is required')
+    .isLength({ min: 3, max: 20 })
+    .withMessage('Username must be between 3 and 20 characters')
+    .matches(/^[a-zA-Z0-9_]+$/)
+    .withMessage('Username can only contain letters, numbers, and underscores'),
+  
+  body('password')
+    .notEmpty()
+    .withMessage('Password is required')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters long')
+];
+
 // Settings validation
 exports.validateSettings = (req, res, next) => {
   const { threshold } = req.body;
@@ -115,3 +145,4 @@ exports.validateCommand = (req, res, next) => {
   
   next();
 };
+
