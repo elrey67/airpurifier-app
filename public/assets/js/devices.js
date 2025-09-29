@@ -1,17 +1,35 @@
-// Device selection logic
+// devices.js - Fixed with proper token handling
 document.addEventListener('DOMContentLoaded', function() {
     Logger.log('Device selection page loaded');
-    checkAuthentication();
-    loadUserDevices();
-    
-    document.getElementById('logout-btn').addEventListener('click', logoutUser);
-    document.getElementById('add-device-form').addEventListener('submit', addNewDevice);
-    
-    // Set up periodic status updates for all devices
-    setInterval(updateDevicesStatus, 5000); // Update every 5 seconds
+    initializeDevicesPage();
 });
 
-// Environment-based logger
+// Initialize the devices page
+async function initializeDevicesPage() {
+    try {
+        await checkAuthentication();
+        await loadUserDevices();
+        
+        // Set up event listeners
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                logoutUser();
+            });
+        }
+        
+        const addDeviceForm = document.getElementById('add-device-form');
+        if (addDeviceForm) {
+            addDeviceForm.addEventListener('submit', addNewDevice);
+        }
+    } catch (error) {
+        Logger.error('Failed to initialize devices page', error);
+        handleUnauthenticatedState();
+    }
+}
+
+// Environment-based logger for devices page
 const Logger = {
     getEnvironment: function() {
         const hostname = window.location.hostname;
@@ -66,7 +84,7 @@ function getBaseURL() {
     return `${protocol}//${hostname}${port ? ':' + port : ''}`;
 }
 
-// Enhanced fetch with error handling
+// Enhanced fetch with error handling (updated to match reference auth pattern)
 async function apiFetch(endpoint, options = {}) {
     const baseURL = getBaseURL();
     const token = localStorage.getItem('authToken');
@@ -74,21 +92,30 @@ async function apiFetch(endpoint, options = {}) {
     Logger.log('API fetch request', { 
         endpoint, 
         baseURL,
-        hasToken: !!token 
+        hasToken: !!token
     });
     
-    const defaultOptions = {
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        credentials: 'include'
-    };
-    
     try {
+        const defaultOptions = {
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include'
+        };
+        
+        // Add Authorization header if we have a token - FIXED
+        if (token) {
+            defaultOptions.headers['Authorization'] = `Bearer ${token}`;
+            Logger.log('Adding Authorization header with Bearer token');
+        }
+        
         const response = await fetch(`${baseURL}${endpoint}`, {
             ...defaultOptions,
-            ...options
+            ...options,
+            headers: {
+                ...defaultOptions.headers,
+                ...options.headers
+            }
         });
         
         Logger.log('API response received', {
@@ -96,6 +123,12 @@ async function apiFetch(endpoint, options = {}) {
             status: response.status,
             statusText: response.statusText
         });
+        
+        if (response.status === 401) {
+            Logger.warn('Authentication failed, redirecting to login');
+            handleUnauthenticatedState();
+            throw new Error('Authentication required');
+        }
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -128,135 +161,116 @@ async function apiFetch(endpoint, options = {}) {
     }
 }
 
+// Authentication check - FIXED to send token
+// Authentication check (updated to match reference pattern)
 async function checkAuthentication() {
-    const token = localStorage.getItem('authToken');
-    
-    Logger.log('Checking authentication', { hasToken: !!token });
-    
-    if (!token) {
-        Logger.warn('No auth token found, redirecting to login');
-        window.location.href = '../auth/login.html';
-        return;
-    }
-
     try {
-        const data = await apiFetch('/api/auth/verify');
+        Logger.log('Checking authentication status...');
         
-        if (!data.valid) {
-            Logger.warn('Token invalid, clearing storage and redirecting');
-            localStorage.clear();
-            window.location.href = '../auth/login.html';
+        const token = localStorage.getItem('authToken');
+        if (!token) {
+            Logger.warn('No auth token found');
+            handleUnauthenticatedState();
+            return;
+        }
+        
+        const baseURL = getBaseURL();
+        const response = await fetch(`${baseURL}/api/user`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include'
+        });
+
+        Logger.log('Response from /api/user:', {
+            status: response.status,
+            ok: response.ok
+        });
+
+        if (response.status === 401) {
+            Logger.warn('User not authenticated');
+            handleUnauthenticatedState();
             return;
         }
 
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        Logger.log('User data received:', data);
+
+        if (!data.success || !data.user || !data.user.username) {
+            throw new Error(`Invalid user data received: ${JSON.stringify(data)}`);
+        }
+
+        // Update UI for authenticated user
+        updateUIForAuthenticatedUser(data.user);
         Logger.info('User authenticated', { username: data.user.username });
-        document.getElementById('username-display').textContent = data.user.username;
     } catch (error) {
-        Logger.error('Auth verification failed', error);
-        localStorage.clear();
-        window.location.href = '../auth/login.html';
+        Logger.error('Auth check failed:', error);
+        handleUnauthenticatedState();
     }
 }
 
+function updateUIForAuthenticatedUser(user) {
+    const username = user.username || 'User';
+    Logger.log('Updating UI for authenticated user:', username);
+
+    const usernameDisplay = document.getElementById('username-display');
+    if (usernameDisplay) {
+        usernameDisplay.textContent = username;
+    }
+    
+    // Update localStorage for consistency
+    localStorage.setItem('isAuthenticated', 'true');
+    localStorage.setItem('username', username);
+    document.body.classList.add('user-authenticated');
+}
+
+function handleUnauthenticatedState() {
+    Logger.warn('Handling unauthenticated state');
+    
+    localStorage.removeItem('isAuthenticated');
+    localStorage.removeItem('username');
+    localStorage.removeItem('authToken');
+    document.body.classList.remove('user-authenticated');
+    
+    // Redirect to login with current page as redirect target
+    const currentPath = window.location.pathname + window.location.search;
+    window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`;
+}
+
 async function loadUserDevices() {
-    Logger.log('Loading user devices with real-time status');
+    Logger.log('Loading user devices');
     
     try {
         const devices = await apiFetch('/api/devices/my-devices');
-        fetch(`/api/latest-data?device_id=${deviceId}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
-        credentials: 'include'
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        console.log('Data received from database:', data);
         
-        if (!data || data.error) {
-            throw new Error(data?.error || 'Invalid data received');
-        }
+        Logger.log('Devices loaded from API', { count: devices.length });
         
-        // Use the same status detection logic
-        if (data.status) {
-            systemMode = data.status;
-        } else if (data.is_online !== undefined) {
-            systemMode = data.is_online ? 'online' : 'offline';
-        } else {
-            systemMode = 'offline';
-        }
-        
-        updateFromBackendData(data);
-        lastSuccessfulUpdate = Date.now();
-        connectionRetries = 0; // Reset retries on successful update
-        
-        // Update connection status with improved logic
-        updateConnectionStatusIfChanged(data);
-    })
-        
-        // Enhance devices with real-time status from current_status table
-        const enhancedDevices = await Promise.all(
-            devices.map(async (device) => {
-                try {
-                    // Fetch current status for each device
-                    const statusData = await apiFetch(`/api/device-status?device_id=${device.device_id}`);
-                    return {
-                        ...device,
-                        status: statusData.status || 'offline',
-                        system_mode: statusData.system_mode || 'offline',
-                        online: statusData.is_online || false,
-                        last_seen: statusData.last_updated || device.last_seen
-                    };
-                } catch (error) {
-                    Logger.warn(`Could not fetch status for device ${device.device_id}`, error);
-                    return {
-                        ...device,
-                        status: 'offline',
-                        system_mode: 'offline',
-                        online: false
-                    };
-                }
-            })
-        );
-        
-        Logger.log('Enhanced devices loaded', { count: enhancedDevices.length });
-        
-        if (enhancedDevices.length === 0) {
+        if (devices.length === 0) {
             Logger.info('No devices found, showing welcome message');
             showWelcomeMessage();
         } else {
-            Logger.info('Displaying enhanced devices', { count: enhancedDevices.length });
-            displayDevices(enhancedDevices);
+            Logger.info('Displaying devices', { count: devices.length });
+            displayDevices(devices);
         }
     } catch (error) {
-        Logger.error('Error loading enhanced devices from API, falling back to basic load', error);
+        Logger.error('Error loading devices from API, falling back to localStorage', error);
         
-        // Fallback to basic device loading without status enhancement
-        try {
-            const basicDevices = await apiFetch('/api/devices/my-devices');
-            if (basicDevices.length === 0) {
-                showWelcomeMessage();
-            } else {
-                displayDevices(basicDevices);
-            }
-        } catch (fallbackError) {
-            Logger.error('Both API calls failed, using localStorage fallback', fallbackError);
-            
-            // Final fallback to localStorage
-            const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
-            Logger.log('LocalStorage devices', { count: localDevices.length });
-            
-            if (localDevices.length === 0) {
-                showWelcomeMessage();
-            } else {
-                displayDevices(localDevices);
-            }
+        // Fallback to localStorage if API fails
+        const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
+        Logger.log('LocalStorage devices', { count: localDevices.length });
+        
+        if (localDevices.length === 0) {
+            Logger.info('No devices in localStorage, showing welcome message');
+            showWelcomeMessage();
+        } else {
+            Logger.info('Displaying devices from localStorage', { count: localDevices.length });
+            displayDevices(localDevices);
         }
     }
 }
@@ -299,38 +313,6 @@ function displayDevices(devices) {
     devices.forEach(device => {
         const deviceCard = document.createElement('div');
         deviceCard.className = 'device-card';
-        deviceCard.setAttribute('data-device-id', device.device_id || device.id);
-        
-        // Use proper status detection (same as dashboard)
-        const status = device.status || (device.online ? 'online' : 'offline');
-        const systemMode = device.system_mode || 'offline';
-        const lastSeen = device.last_seen;
-        
-        // Calculate time difference for status display
-        let statusText = 'Never';
-        if (lastSeen) {
-            const lastSeenDate = new Date(lastSeen);
-            const now = new Date();
-            const diffMs = now - lastSeenDate;
-            const diffMins = Math.floor(diffMs / 60000);
-            
-            if (status === 'online') {
-                if (diffMins < 5) {
-                    statusText = 'Live - Connected now';
-                } else if (diffMins < 30) {
-                    statusText = `${diffMins} min ago`;
-                } else {
-                    statusText = `${Math.floor(diffMins/60)} hours ago`;
-                }
-            } else {
-                if (diffMins < 60) {
-                    statusText = `${diffMins} min ago`;
-                } else {
-                    statusText = `${Math.floor(diffMins/60)} hours ago`;
-                }
-            }
-        }
-        
         deviceCard.innerHTML = `
             <div class="device-header">
                 <div class="device-icon">
@@ -340,12 +322,12 @@ function displayDevices(devices) {
                     <h4>${device.name || device.device_name}</h4>
                     <p class="device-location"><i class="fas fa-map-marker-alt"></i> ${device.location || 'Not specified'}</p>
                     <p class="device-id">ID: ${device.device_id || device.id}</p>
-                    <p class="device-mode">Mode: ${systemMode.toUpperCase()}</p>
-                    <p class="last-seen">Last seen: ${lastSeen ? statusText : 'Never'}</p>
+                    <p class="last-seen">Status: ${device.status || 'unknown'}</p>
+                    <p class="last-seen">Last seen: ${device.last_seen ? formatTime(device.last_seen) : 'Never'}</p>
                 </div>
-                <div class="device-status ${status}">
+                <div class="device-status ${device.status || 'unknown'}">
                     <i class="fas fa-circle"></i>
-                    ${status.toUpperCase()}
+                    ${device.status || 'Unknown'}
                 </div>
             </div>
             <div class="device-credentials">
@@ -377,37 +359,29 @@ function displayDevices(devices) {
             </div>
         `;
         
-        // Add status indicator styling
-        const statusIndicator = deviceCard.querySelector('.device-status .fas.fa-circle');
-        if (statusIndicator) {
-            if (status === 'online') {
-                statusIndicator.style.color = 'var(--success)';
-            } else if (status === 'offline') {
-                statusIndicator.style.color = 'var(--danger)';
-            } else {
-                statusIndicator.style.color = 'var(--warning)';
-            }
-        }
-        
         // Add event listeners
-        deviceCard.querySelector('.select-device').addEventListener('click', () => {
+        deviceCard.querySelector('.select-device').addEventListener('click', (e) => {
+            e.preventDefault();
             Logger.log('Device selected', { deviceId: device.device_id || device.id });
             selectDevice(device.device_id || device.id, device.name || device.device_name);
         });
         
-        deviceCard.querySelector('.edit-device').addEventListener('click', () => {
+        deviceCard.querySelector('.edit-device').addEventListener('click', (e) => {
+            e.preventDefault();
             Logger.log('Editing device', { deviceId: device.device_id || device.id });
             editDevice(device);
         });
         
-        deviceCard.querySelector('.delete-device').addEventListener('click', () => {
+        deviceCard.querySelector('.delete-device').addEventListener('click', (e) => {
+            e.preventDefault();
             Logger.log('Delete device clicked', { deviceId: device.device_id || device.id });
             deleteDevice(device.device_id || device.id, device.name || device.device_name);
         });
         
         // Add copy functionality
         deviceCard.querySelectorAll('.btn-copy').forEach(btn => {
-            btn.addEventListener('click', function() {
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
                 const value = this.getAttribute('data-value');
                 Logger.log('Copy button clicked', { value: value ? '***REDACTED***' : 'empty' });
                 copyToClipboard(value);
@@ -417,91 +391,6 @@ function displayDevices(devices) {
         
         devicesList.appendChild(deviceCard);
     });
-}
-
-function updateDeviceCardStatus(device) {
-    const deviceCard = document.querySelector(`[data-device-id="${device.device_id || device.id}"]`);
-    if (!deviceCard) return;
-    
-    // Get status elements
-    const statusElement = deviceCard.querySelector('.device-status');
-    const lastSeenElement = deviceCard.querySelector('.last-seen');
-    
-    if (statusElement && lastSeenElement) {
-        // Use the same status logic as your dashboard
-        const status = device.status || (device.online ? 'online' : 'offline');
-        const systemMode = device.system_mode || 'offline';
-        const lastSeen = device.last_seen;
-        
-        // Update status with proper styling
-        statusElement.className = `device-status ${status}`;
-        statusElement.innerHTML = `<i class="fas fa-circle"></i> ${status.toUpperCase()}`;
-        
-        // Update last seen with proper formatting
-        if (lastSeen) {
-            const lastSeenDate = new Date(lastSeen);
-            const now = new Date();
-            const diffMs = now - lastSeenDate;
-            const diffMins = Math.floor(diffMs / 60000);
-            
-            let statusText;
-            if (status === 'online') {
-                if (diffMins < 5) {
-                    statusText = 'Live - Connected now';
-                } else if (diffMins < 30) {
-                    statusText = `Online - ${diffMins} min ago`;
-                } else {
-                    statusText = `Online - ${Math.floor(diffMins/60)} hours ago`;
-                }
-            } else {
-                if (diffMins < 60) {
-                    statusText = `Offline - ${diffMins} min ago`;
-                } else {
-                    statusText = `Offline - ${Math.floor(diffMins/60)} hours ago`;
-                }
-            }
-            
-            lastSeenElement.textContent = `Last seen: ${statusText}`;
-        } else {
-            lastSeenElement.textContent = 'Last seen: Never';
-        }
-        
-        // Update status indicator color
-        const statusIndicator = statusElement.querySelector('.fas.fa-circle');
-        if (statusIndicator) {
-            if (status === 'online') {
-                statusIndicator.style.color = 'var(--success)';
-            } else if (status === 'offline') {
-                statusIndicator.style.color = 'var(--danger)';
-            } else {
-                statusIndicator.style.color = 'var(--warning)';
-            }
-        }
-    }
-}
-
-async function updateDevicesStatus() {
-    Logger.log('Updating devices status from database');
-    
-    try {
-        const devices = await apiFetch('/api/devices/my-devices');
-        const devicesList = document.getElementById('devices-list');
-        
-        if (!devicesList) return;
-        
-        // Update each device card with current status
-        devices.forEach(device => {
-            updateDeviceCardStatus(device);
-        });
-        
-    } catch (error) {
-        Logger.error('Error updating devices status', error);
-        // Fallback to localStorage
-        const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
-        localDevices.forEach(device => {
-            updateDeviceCardStatus(device);
-        });
-    }
 }
 
 async function addNewDevice(e) {
@@ -613,10 +502,17 @@ function editDevice(device) {
     const submitBtn = form.querySelector('button[type="submit"]');
     
     submitBtn.innerHTML = '<i class="fas fa-save"></i> Update Device';
-    submitBtn.onclick = function(e) {
+    
+    // Create new event listener for update
+    const newHandler = function(e) {
         e.preventDefault();
         updateDevice(device.device_id || device.id);
     };
+    
+    // Remove old event listener and add new one
+    const newSubmitBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newSubmitBtn, submitBtn);
+    newSubmitBtn.addEventListener('click', newHandler);
     
     // Add cancel button
     if (!document.getElementById('cancel-edit')) {
@@ -625,7 +521,7 @@ function editDevice(device) {
         cancelBtn.id = 'cancel-edit';
         cancelBtn.className = 'btn btn-secondary';
         cancelBtn.innerHTML = '<i class="fas fa-times"></i> Cancel';
-        cancelBtn.onclick = cancelEdit;
+        cancelBtn.addEventListener('click', cancelEdit);
         form.appendChild(cancelBtn);
     }
     
@@ -757,13 +653,16 @@ function deleteDeviceFromLocalStorage(deviceId, deviceName) {
 function cancelEdit() {
     Logger.log('Cancelling edit mode');
     
-    document.getElementById('add-device-form').reset();
-    const submitBtn = document.getElementById('add-device-form').querySelector('button[type="submit"]');
+    const form = document.getElementById('add-device-form');
+    form.reset();
+    
+    const submitBtn = form.querySelector('button[type="submit"]');
     submitBtn.innerHTML = '<i class="fas fa-plus"></i> Add Device';
-    submitBtn.onclick = function(e) {
-        e.preventDefault();
-        addNewDevice(e);
-    };
+    
+    // Reset event listener
+    const newSubmitBtn = submitBtn.cloneNode(true);
+    submitBtn.parentNode.replaceChild(newSubmitBtn, submitBtn);
+    newSubmitBtn.addEventListener('submit', addNewDevice);
     
     const cancelBtn = document.getElementById('cancel-edit');
     if (cancelBtn) {
@@ -779,11 +678,28 @@ function selectDevice(deviceId, deviceName) {
     window.location.href = '../';
 }
 
-function logoutUser() {
+// Logout function - FIXED to use POST method
+async function logoutUser() {
     Logger.info('User logging out');
     
-    localStorage.clear();
-    window.location.href = '../auth/login.html';
+    try {
+        const refreshToken = localStorage.getItem('refreshToken');
+        
+        await apiFetch('/api/auth/logout', {
+            method: 'POST',
+            body: JSON.stringify({
+                refreshToken: refreshToken
+            })
+        });
+        
+        Logger.info('Logout API call successful');
+    } catch (error) {
+        Logger.error('Logout API call failed:', error);
+    } finally {
+        // Always clear local storage and redirect regardless of API success/failure
+        localStorage.clear();
+        window.location.href = '/login';
+    }
 }
 
 function copyToClipboard(text) {
@@ -869,18 +785,14 @@ function formatTime(dateString) {
     const date = new Date(dateString);
     const now = new Date();
     const diffMs = now - date;
-    const diffSecs = Math.floor(diffMs / 1000);
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
     
-    if (diffSecs < 60) return 'Just now';
-    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
-    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
-    if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} minutes ago`;
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    if (diffDays < 7) return `${diffDays} days ago`;
     
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-    });
+    return date.toLocaleDateString();
 }

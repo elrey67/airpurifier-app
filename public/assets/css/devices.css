@@ -340,3 +340,40 @@
         width: 100%;
     }
 }
+
+/* Shared Device Styles */
+.shared-device {
+    border-left: 4px solid var(--accent);
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+}
+
+.shared-badge {
+    background: var(--accent);
+    color: var(--button-text);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    display: inline-block;
+    margin-bottom: 8px;
+}
+
+.shared-badge i {
+    margin-right: 4px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+    
+    .navbar {
+        padding: 1rem;
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .card {
+        padding: 1.5rem;
+    }
+}

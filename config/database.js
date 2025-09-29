@@ -19,13 +19,15 @@ const db = new sqlite3.Database(dbPath, (err) => {
     // Create tables if they don't exist
     db.serialize(() => {
       // Create devices table first (since other tables reference it)
-      db.run(`CREATE TABLE IF NOT EXISTS devices (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT UNIQUE NOT NULL,
-        name TEXT DEFAULT 'Air Purifier',
-        location TEXT DEFAULT 'Living Room',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`);
+  db.run(`CREATE TABLE IF NOT EXISTS devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT UNIQUE NOT NULL,
+  name TEXT DEFAULT 'Air Purifier',
+  location TEXT DEFAULT 'Living Room',
+  user_id INTEGER NOT NULL,  
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
 
       // Device status table (stores historical readings)
 db.run(`CREATE TABLE IF NOT EXISTS readings (
@@ -42,8 +44,7 @@ db.run(`CREATE TABLE IF NOT EXISTS readings (
 )`);
 
       // Current device status table (for real-time updates)
-      db.run(`-- Create current_status table if it doesn't exist
-CREATE TABLE IF NOT EXISTS current_status (
+db.run(`CREATE TABLE IF NOT EXISTS current_status (
   device_id TEXT PRIMARY KEY,
   system_mode TEXT DEFAULT 'offline',
   input_air_quality REAL DEFAULT 0,
@@ -53,8 +54,25 @@ CREATE TABLE IF NOT EXISTS current_status (
   auto_mode INTEGER DEFAULT 1,
   threshold INTEGER DEFAULT 300,
   online INTEGER DEFAULT 0,
-  last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
-);`);
+  last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+)`);
+
+
+db.run(`CREATE TABLE IF NOT EXISTS device_sharing (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  owner_user_id INTEGER NOT NULL,
+  shared_user_id INTEGER NOT NULL,
+  permissions TEXT DEFAULT 'view_only', -- view_only, control (future), admin (future)
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE,
+  FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (shared_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(device_id, shared_user_id) -- Prevent duplicate shares
+)`);
+
+
 // Safely add ip_address column only if it doesn't exist
 db.get("SELECT name FROM pragma_table_info('current_status') WHERE name='ip_address'", (err, row) => {
     if (err) {
@@ -103,6 +121,8 @@ db.get("SELECT name FROM pragma_table_info('current_status') WHERE name='ip_addr
         FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
       )`);
 
+      
+
       // Create indexes for better performance
       db.run('CREATE INDEX IF NOT EXISTS idx_readings_device_id ON readings(device_id)');
       db.run('CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)');
@@ -113,6 +133,34 @@ db.get("SELECT name FROM pragma_table_info('current_status') WHERE name='ip_addr
       createDefaultDevice();
     });
   }
+});
+
+
+// Add user_id column to devices table if it doesn't exist
+db.get("SELECT name FROM pragma_table_info('devices') WHERE name='user_id'", (err, row) => {
+    if (err) {
+        console.error('Error checking for user_id column:', err.message);
+    } else if (!row) {
+        // Column doesn't exist, so add it
+        db.run('ALTER TABLE devices ADD COLUMN user_id INTEGER DEFAULT 1', (alterErr) => {
+            if (alterErr) {
+                console.error('Error adding user_id column:', alterErr.message);
+            } else {
+                console.log('✓ Added user_id column to devices table');
+                
+                // Update existing devices to belong to admin user (user_id = 1)
+                db.run('UPDATE devices SET user_id = 1 WHERE user_id IS NULL', (updateErr) => {
+                    if (updateErr) {
+                        console.error('Error updating existing devices:', updateErr.message);
+                    } else {
+                        console.log('✓ Updated existing devices with user_id');
+                    }
+                });
+            }
+        });
+    } else {
+        console.log('✓ user_id column already exists in devices table');
+    }
 });
 
 // Function to create default admin user
@@ -166,46 +214,54 @@ function createDefaultDevice() {
     }
 
     if (row.count === 0) {
-      // Create default device
-      db.run(
-        'INSERT INTO devices (device_id, name, location) VALUES (?, ?, ?)',
-        [defaultDeviceId, 'Main Air Purifier', 'Living Room'],
-        function (err) {
-          if (err) {
-            logger.error('Error creating default device:', err.message);
-          } else {
-            logger.info('Default device created successfully');
-
-            // Create default settings for the device
-            db.run(
-              'INSERT INTO settings (device_id, threshold) VALUES (?, ?)',
-              [defaultDeviceId, 300],
-              function (err) {
-                if (err) {
-                  logger.error('Error creating default settings:', err.message);
-                } else {
-                  logger.info('Default settings created successfully');
-                }
-              }
-            );
-
-            // Create initial current_status entry
-            db.run(
-              `INSERT OR IGNORE INTO current_status 
-               (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, online, last_seen) 
-               VALUES (?, 0, 0, 0, FALSE, TRUE, FALSE, datetime('now'))`,
-              [defaultDeviceId],
-              function (err) {
-                if (err) {
-                  logger.error('Error creating initial current_status:', err.message);
-                } else {
-                  logger.info('Initial current_status created successfully');
-                }
-              }
-            );
-          }
+      // Get the admin user ID
+      db.get('SELECT id FROM users WHERE username = ?', ['admin'], (userErr, user) => {
+        if (userErr || !user) {
+          logger.error('Error finding admin user:', userErr?.message);
+          return;
         }
-      );
+
+        // Create default device with user_id
+        db.run(
+          'INSERT INTO devices (device_id, name, location, user_id) VALUES (?, ?, ?, ?)',
+          [defaultDeviceId, 'Main Air Purifier', 'Living Room', user.id],
+          function (err) {
+            if (err) {
+              logger.error('Error creating default device:', err.message);
+            } else {
+              logger.info('Default device created successfully for admin user');
+
+              // Create default settings for the device
+              db.run(
+                'INSERT INTO settings (device_id, threshold) VALUES (?, ?)',
+                [defaultDeviceId, 300],
+                function (err) {
+                  if (err) {
+                    logger.error('Error creating default settings:', err.message);
+                  } else {
+                    logger.info('Default settings created successfully');
+                  }
+                }
+              );
+
+              // Create initial current_status entry
+              db.run(
+                `INSERT OR IGNORE INTO current_status 
+                 (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, online, last_seen) 
+                 VALUES (?, 0, 0, 0, FALSE, TRUE, FALSE, datetime('now'))`,
+                [defaultDeviceId],
+                function (err) {
+                  if (err) {
+                    logger.error('Error creating initial current_status:', err.message);
+                  } else {
+                    logger.info('Initial current_status created successfully');
+                  }
+                }
+              );
+            }
+          }
+        );
+      });
     } else {
       logger.info('Default device already exists, skipping creation');
     }

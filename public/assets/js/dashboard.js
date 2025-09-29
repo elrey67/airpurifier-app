@@ -8,14 +8,341 @@ let autoMode = "ON";
 let threshold = 300;
 let historyData = [];
 let lastUpdateTime = new Date();
-let isUpdating = false; // Prevent overlapping updates
+let isUpdating = false;
 let lastSuccessfulUpdate = null;
 let connectionRetries = 0;
 let lastConnectionStatus = '';
 
+// Environment-based logger
+const Logger = {
+    getEnvironment: function() {
+        const hostname = window.location.hostname;
+        return hostname.includes('.com') ? 'production' : 'development';
+    },
+    
+    isDebugEnabled: function() {
+        return this.getEnvironment() === 'development';
+    },
+    
+    log: function(message, data = null) {
+        if (this.isDebugEnabled()) {
+            console.log(`%c[DASHBOARD] ${message}`, 'color: purple; font-weight: bold;', data || '');
+        }
+    },
+    
+    info: function(message, data = null) {
+        console.info(`%c[DASHBOARD] ${message}`, 'color: teal; font-weight: bold;', data || '');
+    },
+    
+    warn: function(message, data = null) {
+        console.warn(`%c[DASHBOARD] ${message}`, 'color: darkorange; font-weight: bold;', data || '');
+    },
+    
+    error: function(message, error = null) {
+        console.error(`%c[DASHBOARD] ${message}`, 'color: crimson; font-weight: bold;', error || '');
+    },
+    
+    sanitizeData: function(data) {
+        if (!data) return data;
+        
+        const sanitized = { ...data };
+        const sensitiveFields = ['password', 'token', 'authToken', 'authorization', 'secret', 'key'];
+        
+        sensitiveFields.forEach(field => {
+            if (sanitized[field]) {
+                sanitized[field] = '***REDACTED***';
+            }
+        });
+        
+        return sanitized;
+    }
+};
+
+// Check if user is authenticated
+function isAuthenticated() {
+    const token = localStorage.getItem('authToken');
+    if (!token || token === 'null' || token === 'undefined') {
+        Logger.warn('No valid authentication token found');
+        return false;
+    }
+    
+    try {
+        // Check if token is expired
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const expirationTime = payload.exp * 1000;
+        const currentTime = Date.now();
+        
+        if (expirationTime <= currentTime) {
+            Logger.warn('Authentication token has expired');
+            return false;
+        }
+        
+        return true;
+    } catch (error) {
+        Logger.error('Error validating token:', error);
+        return false;
+    }
+}
+
+// Get base URL with proper protocol
+function getBaseURL() {
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    const port = window.location.port;
+    
+    Logger.log('Getting base URL', { protocol, hostname, port });
+    return `${protocol}//${hostname}${port ? ':' + port : ''}`;
+}
+
+// Enhanced fetch with automatic token refresh
+async function apiFetch(endpoint, options = {}) {
+    const baseURL = getBaseURL();
+    let token = localStorage.getItem('authToken');
+    
+    // Check authentication first
+    if (!token || token === 'null' || token === 'undefined') {
+        Logger.warn('No authentication token available, redirecting to login');
+        redirectToLogin();
+        throw new Error('Not authenticated');
+    }
+    
+    Logger.log('API fetch request', { 
+        endpoint, 
+        baseURL,
+        hasToken: !!token 
+    });
+    
+    const defaultOptions = {
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        credentials: 'include'
+    };
+    
+    try {
+        const response = await fetch(`${baseURL}${endpoint}`, {
+            ...defaultOptions,
+            ...options
+        });
+        
+        Logger.log('API response received', {
+            endpoint,
+            status: response.status,
+            statusText: response.statusText
+        });
+        
+        // Handle token expiration (401 Unauthorized)
+        if (response.status === 401) {
+            Logger.warn('Token expired or invalid, attempting refresh');
+            
+            // Try to refresh the token
+            const refreshSuccess = await refreshToken();
+            if (refreshSuccess) {
+                // Retry the request with new token
+                token = localStorage.getItem('authToken');
+                defaultOptions.headers.Authorization = `Bearer ${token}`;
+                
+                const retryResponse = await fetch(`${baseURL}${endpoint}`, {
+                    ...defaultOptions,
+                    ...options
+                });
+                
+                if (!retryResponse.ok) {
+                    if (retryResponse.status === 401) {
+                        Logger.error('Token refresh failed, redirecting to login');
+                        redirectToLogin();
+                        throw new Error('Authentication failed');
+                    }
+                    throw new Error(`Request failed with status ${retryResponse.status}`);
+                }
+                
+                const data = await retryResponse.json();
+                Logger.log('API request successful after token refresh', {
+                    endpoint,
+                    data: Logger.sanitizeData(data)
+                });
+                
+                return data;
+            } else {
+                // Refresh failed, redirect to login
+                Logger.error('Token refresh failed, redirecting to login');
+                redirectToLogin();
+                throw new Error('Authentication failed');
+            }
+        }
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            let errorData;
+            try {
+                errorData = JSON.parse(errorText);
+            } catch {
+                errorData = { error: errorText || `HTTP ${response.status}` };
+            }
+            
+            Logger.warn('API request failed', {
+                endpoint,
+                status: response.status,
+                error: errorData.error
+            });
+            
+            throw new Error(errorData.error || `Request failed with status ${response.status}`);
+        }
+        
+        const data = await response.json();
+        Logger.log('API request successful', {
+            endpoint,
+            data: Logger.sanitizeData(data)
+        });
+        
+        return data;
+    } catch (error) {
+        Logger.error(`API call failed for ${endpoint}`, error);
+        throw error;
+    }
+}
+
+// Token refresh function
+async function refreshToken() {
+    try {
+        Logger.log('Attempting token refresh');
+        
+        const baseURL = getBaseURL();
+        const refreshToken = localStorage.getItem('refreshToken');
+        
+        if (!refreshToken || refreshToken === 'null' || refreshToken === 'undefined') {
+            Logger.warn('No refresh token found');
+            return false;
+        }
+        
+        const response = await fetch(`${baseURL}/api/auth/refresh`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ refreshToken }),
+            credentials: 'include'
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.accessToken) {
+                localStorage.setItem('authToken', data.accessToken);
+                Logger.log('Token refreshed successfully');
+                return true;
+            } else {
+                Logger.warn('Token refresh response missing accessToken');
+                return false;
+            }
+        } else {
+            Logger.warn('Token refresh failed', { status: response.status });
+            return false;
+        }
+    } catch (error) {
+        Logger.error('Token refresh error', error);
+        return false;
+    }
+}
+
+// Redirect to login
+function redirectToLogin() {
+    Logger.info('Redirecting to login page');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('currentDevice');
+    localStorage.removeItem('currentDeviceName');
+    
+    // Show a user-friendly message
+    showAuthError();
+    
+    // Redirect after a short delay
+    setTimeout(() => {
+        window.location.href = '/auth/login.html';
+    }, 2000);
+}
+
+// Show authentication error message
+function showAuthError() {
+    // Create or update error message
+    let errorElement = document.getElementById('auth-error-message');
+    if (!errorElement) {
+        errorElement = document.createElement('div');
+        errorElement.id = 'auth-error-message';
+        errorElement.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #dc3545;
+            color: white;
+            padding: 20px 30px;
+            border-radius: 8px;
+            z-index: 10001;
+            font-size: 16px;
+            font-weight: bold;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        `;
+        document.body.appendChild(errorElement);
+    }
+    
+    errorElement.innerHTML = `
+        <div>⚠️ Session Expired</div>
+        <div style="font-size: 14px; margin-top: 10px;">
+            Please log in again. Redirecting to login page...
+        </div>
+    `;
+    errorElement.style.display = 'block';
+}
+
+// Add logout functionality
+function logout() {
+    Logger.info('User initiated logout');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('currentDevice');
+    localStorage.removeItem('currentDeviceName');
+    window.location.href = '/auth/login.html';
+}
+
+// Check token expiration on page load
+function checkTokenExpiration() {
+    const token = localStorage.getItem('authToken');
+    if (token && token !== 'null' && token !== 'undefined') {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            const expirationTime = payload.exp * 1000; // Convert to milliseconds
+            const currentTime = Date.now();
+            
+            // If token expires in less than 5 minutes, refresh it
+            if (expirationTime - currentTime < 5 * 60 * 1000) {
+                Logger.log('Token expiring soon, refreshing...');
+                refreshToken();
+            }
+        } catch (error) {
+            Logger.error('Error checking token expiration', error);
+            // If token is malformed, remove it and redirect
+            localStorage.removeItem('authToken');
+            redirectToLogin();
+        }
+    }
+}
+
 // Initialize the page
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded, initializing air purifier dashboard...');
+    Logger.log('DOM loaded, initializing air purifier dashboard...');
+    
+    // Check authentication first
+    if (!isAuthenticated()) {
+        Logger.warn('User not authenticated, redirecting to login');
+        redirectToLogin();
+        return;
+    }
+    
+    // Check token expiration on load
+    checkTokenExpiration();
+    
     initializeEventListeners();
     updateConnectionStatus('reconnecting', 'Checking system mode...');
     
@@ -25,24 +352,28 @@ document.addEventListener('DOMContentLoaded', function() {
         serverUrlElement.textContent = window.location.hostname;
     }
     
+    // Add logout button functionality if it exists
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', logout);
+        Logger.log('Logout button initialized');
+    }
+    
     // Initial update
     setTimeout(() => {
         checkSystemMode();
     }, 100);
     
     // Set up periodic updates
-    setInterval(updateData, 2000); // Update every 2 seconds
+    setInterval(updateData, 2000);
+    
+    // Check token expiration every minute
+    setInterval(checkTokenExpiration, 60 * 1000);
 });
 
 function initializeEventListeners() {
-    console.log('Initializing event listeners...');
+    Logger.log('Initializing event listeners...');
 
-    const sensorGrid = document.querySelector('.sensors-grid');
-    console.log('Sensor grid element:', sensorGrid);
-    
-    const sensorCards = document.querySelectorAll('.sensor-card');
-    console.log('Sensor cards found:', sensorCards.length);
-    
     // Control event listeners
     const toggleFanBtn = document.getElementById('toggle-fan');
     const toggleModeBtn = document.getElementById('toggle-mode');
@@ -51,24 +382,24 @@ function initializeEventListeners() {
     
     if (toggleFanBtn) {
         toggleFanBtn.addEventListener('click', toggleFan);
-        console.log('Fan toggle button initialized');
+        Logger.log('Fan toggle button initialized');
     }
     if (toggleModeBtn) {
         toggleModeBtn.addEventListener('click', toggleMode);
-        console.log('Mode toggle button initialized');
+        Logger.log('Mode toggle button initialized');
     }
     if (saveThresholdBtn) {
         saveThresholdBtn.addEventListener('click', saveThreshold);
-        console.log('Save threshold button initialized');
+        Logger.log('Save threshold button initialized');
     }
     if (thresholdSlider) {
         thresholdSlider.addEventListener('input', updateThreshold);
-        console.log('Threshold slider initialized');
+        Logger.log('Threshold slider initialized');
     }
 
     // History tabs
     const historyTabs = document.querySelectorAll('.history-tab');
-    console.log('Found history tabs:', historyTabs.length);
+    Logger.log('Found history tabs:', historyTabs.length);
     
     historyTabs.forEach(tab => {
         tab.addEventListener('click', function() {
@@ -80,7 +411,7 @@ function initializeEventListeners() {
             const contentElement = document.getElementById(contentId);
             if (contentElement) {
                 contentElement.classList.add('active');
-                console.log('Switched to tab:', this.dataset.tab);
+                Logger.log('Switched to tab:', this.dataset.tab);
             }
             
             if (this.dataset.tab === 'stats') {
@@ -90,114 +421,103 @@ function initializeEventListeners() {
     });
 }
 
-// Get the device ID (you may need to set this based on your setup)
+// Get the device ID
 function getCurrentDeviceId() {
-    // Use the same device ID as your ESP32 version
     return 'esp32_air_purifier_01';
 }
 
 function checkSystemMode() {
-    console.log('Checking system mode via database API...');
+    // Check authentication before making API calls
+    if (!isAuthenticated()) {
+        Logger.warn('Not authenticated, cannot check system mode');
+        redirectToLogin();
+        return;
+    }
+
+    Logger.log('Checking system mode via database API...');
     const deviceId = getCurrentDeviceId();
-    const token = localStorage.getItem('authToken');
     
-    fetch(`/api/device-status?device_id=${deviceId}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
-        credentials: 'include'
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
+    apiFetch(`/api/device-status?device_id=${deviceId}`)
     .then(data => {
-        console.log('System status received from database:', data);
+        Logger.log('System status received from database:', data);
         
-        // Use the same status detection logic as the ESP32 version
-       systemMode = data.status || data.system_mode || 'offline';
+        // SIMPLE LOGIC: Just use the status field from backend
+        systemMode = data.status || 'offline';
         
-        console.log('System mode determined:', systemMode);
+        Logger.log('System mode determined:', systemMode);
         
-        // Set initial connection status
+        // Set initial connection status based on backend status
         const initialStatus = systemMode === 'online' ? 'connected' : 'disconnected';
         const initialMessage = systemMode === 'online' ? 
             'Device online - Real-time data' : 
             'Device offline - Using cached data';
             
-        lastConnectionStatus = `${initialStatus}:${systemMode}`;
+        lastConnectionStatus = systemMode;
         updateConnectionStatus(initialStatus, initialMessage);
     })
     .catch(error => {
-        console.error('Error checking system mode:', error);
+        Logger.error('Error checking system mode:', error);
         systemMode = 'offline';
-        lastConnectionStatus = 'error:offline';
-        updateConnectionStatus('error', 'Failed to connect to database');
+        lastConnectionStatus = 'offline';
+        if (error.message === 'Not authenticated' || error.message === 'Authentication failed') {
+            updateConnectionStatus('error', 'Authentication required');
+        } else {
+            updateConnectionStatus('error', 'Failed to connect to database');
+        }
     });
 }
 
 function updateData() {
+    // Check authentication before making API calls
+    if (!isAuthenticated()) {
+        Logger.warn('Not authenticated, skipping data update');
+        return;
+    }
+
     // Prevent overlapping updates
     if (isUpdating) {
-        console.log('Data update skipped - previous update still in progress');
+        Logger.log('Data update skipped - previous update still in progress');
         return;
     }
     
     isUpdating = true;
     const deviceId = getCurrentDeviceId();
-    const token = localStorage.getItem('authToken');
-    console.log('Fetching data from database API for device:', deviceId);
+    Logger.log('Fetching data from database API for device:', deviceId);
     
-    fetch(`/api/latest-data?device_id=${deviceId}`, {
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
-        credentials: 'include'
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
+    apiFetch(`/api/latest-data?device_id=${deviceId}`)
     .then(data => {
-        console.log('Data received from database:', data);
+        Logger.log('Data received from database:', data);
         
         if (!data || data.error) {
             throw new Error(data?.error || 'Invalid data received');
         }
         
-        // Use the same status detection logic
-        if (data.status) {
-            systemMode = data.status;
-        } else if (data.is_online !== undefined) {
-            systemMode = data.is_online ? 'online' : 'offline';
-        } else {
-            systemMode = 'offline';
-        }
+        // SIMPLE LOGIC: Just use the status field from backend
+        systemMode = data.status || 'offline';
         
         updateFromBackendData(data);
         lastSuccessfulUpdate = Date.now();
-        connectionRetries = 0; // Reset retries on successful update
+        connectionRetries = 0;
         
-        // Update connection status with improved logic
-        updateConnectionStatusIfChanged(data);
+        // SIMPLE STATUS UPDATE: Just use the backend status
+        updateConnectionStatusBasedOnBackend(data);
     })
     .catch(error => {
-        console.error('Error fetching data:', error);
+        Logger.error('Error fetching data:', error);
+        
+        if (error.message === 'Not authenticated' || error.message === 'Authentication failed') {
+            updateConnectionStatus('error', 'Authentication required');
+            // Don't increment retries for auth errors
+            return;
+        }
+        
         connectionRetries++;
         
         // Only show error status after multiple failures
         if (connectionRetries >= 3) {
-            // Don't change systemMode to offline immediately - keep previous state
             updateConnectionStatus('error', `Connection error - ${error.message}`);
         } else {
-            console.log(`Connection retry ${connectionRetries}/3`);
-            // Maintain current status during retries
+            Logger.log(`Connection retry ${connectionRetries}/3`);
             updateConnectionStatus('reconnecting', `Reconnecting... (attempt ${connectionRetries}/3)`);
         }
     })
@@ -206,73 +526,19 @@ function updateData() {
     });
 }
 
-// Improved function to prevent flickering connection status
-function updateConnectionStatusIfChanged(data) {
-    // Fix timestamp parsing - handle different formats
-    let lastUpdate;
-    const timestamp = data.timestamp || data.last_updated;
-    
-    if (timestamp) {
-        // Handle various timestamp formats
-        if (typeof timestamp === 'string') {
-            // Replace space with 'T' if needed for proper ISO format
-            const isoString = timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T');
-            lastUpdate = new Date(isoString);
-        } else {
-            lastUpdate = new Date(timestamp);
-        }
-    } else {
-        lastUpdate = new Date(); // Use current time if no timestamp
-    }
-    
-    // Check if the parsed date is valid
-    if (isNaN(lastUpdate.getTime())) {
-        console.warn('Invalid timestamp received:', timestamp);
-        lastUpdate = new Date(); // Fallback to current time
-    }
-    
-    const minutesSinceUpdate = (new Date() - lastUpdate) / (1000 * 60);
-    
-    console.log('Timestamp debugging:', {
-        rawTimestamp: timestamp,
-        parsedDate: lastUpdate,
-        minutesSinceUpdate: minutesSinceUpdate,
-        systemMode: systemMode
-    });
-    
-    let status, message;
-    
-    // PRIMARY LOGIC: Trust the backend's status first
-    if (systemMode === 'online') {
-        // Device is online according to backend
-        if (minutesSinceUpdate < 10) { // Increased to 10 minutes for stability
-            status = 'connected';
-            message = 'Device online - Real-time data';
-        } else if (minutesSinceUpdate < 30) { // New intermediate state
-            status = 'connected';
-            message = `Device online - Data delayed (${Math.round(minutesSinceUpdate)} min)`;
-        } else {
-            // If data is very old but backend says online, show warning instead of error
-             status = 'connected';
-            message = 'Device online - Real-time data';
-        }
-    } else {
-        // Device is offline according to backend
-        if (minutesSinceUpdate < 60) {
-            status = 'disconnected';
-            message = `Device offline - Using recent data (${Math.round(minutesSinceUpdate)} min old)`;
-        } else {
-            status = 'error';
-            message = 'Device offline - Data outdated';
-        }
-    }
+// SIMPLIFIED: Just use the backend's status directly
+function updateConnectionStatusBasedOnBackend(data) {
+    // ULTRA SIMPLE: Just use the status field directly
+    const status = data.status === 'online' ? 'connected' : 'disconnected';
+    const message = data.status === 'online' 
+        ? 'Device online - Real-time data' 
+        : 'Device offline - Using cached data';
     
     // Only update if status actually changed
-    const newStatusString = `${status}:${systemMode}:${Math.round(minutesSinceUpdate)}`;
-    if (lastConnectionStatus !== newStatusString) {
-        lastConnectionStatus = newStatusString;
+    if (lastConnectionStatus !== data.status) {
+        lastConnectionStatus = data.status;
         updateConnectionStatus(status, message);
-        console.log('Connection status changed:', { status, message, systemMode, minutesSinceUpdate });
+        Logger.log('Connection status updated:', { status, message, systemMode: data.status });
     }
 }
 
@@ -281,7 +547,7 @@ function updateConnectionStatus(status, message) {
     const statusText = document.getElementById('connection-text');
     
     if (!statusElement || !statusText) {
-        console.error('Connection status elements not found');
+        Logger.error('Connection status elements not found');
         return;
     }
     
@@ -319,25 +585,25 @@ function updateConnectionStatus(status, message) {
             : "<i class='fas fa-database'></i> Offline";
     }
     
-    console.log('Connection status updated:', { status, message, systemMode });
+    Logger.log('Connection status updated:', { status, message, systemMode });
 }
 
 function updateFromBackendData(data) {
-    console.log('Updating from backend data:', data);
+    Logger.log('Updating from backend data:', data);
     
-    // Use the main 'status' field instead of complex logic
-    systemMode = data.status || data.system_mode || 'offline';
+    // Use the main 'status' field from backend
+    systemMode = data.status || 'offline';
     
     // Extract values from database data structure
     const deviceData = data.data || data;
-    
+
     inputAirQuality = parseFloat(deviceData.input_air_quality) || 0;
     outputAirQuality = parseFloat(deviceData.output_air_quality) || 0;
     efficiency = parseFloat(deviceData.efficiency) || 0;
     fanState = Boolean(deviceData.fan_state);
     autoMode = deviceData.auto_mode === true || deviceData.auto_mode === 1 ? "ON" : "OFF";
     
-    console.log('Processed values:', {
+    Logger.log('Processed values:', {
         inputAirQuality,
         outputAirQuality,
         efficiency,
@@ -352,14 +618,14 @@ function updateFromBackendData(data) {
 }
 
 function updateAllDisplays() {
-    console.log('Updating all displays...');
+    Logger.log('Updating all displays...');
     
     // Update main sensor display values
     updateElementText('input-air-quality-value', Math.round(inputAirQuality) + ' PPM');
     updateElementText('output-air-quality-value', Math.round(outputAirQuality) + ' PPM');
     updateElementText('efficiency-value', Math.round(efficiency) + '%');
     
-    console.log(`Display values - Input: ${Math.round(inputAirQuality)} PPM, Output: ${Math.round(outputAirQuality)} PPM, Efficiency: ${Math.round(efficiency)}%`);
+    Logger.log(`Display values - Input: ${Math.round(inputAirQuality)} PPM, Output: ${Math.round(outputAirQuality)} PPM, Efficiency: ${Math.round(efficiency)}%`);
     
     // Update value colors based on air quality
     updateValueColor('input-air-quality-value', inputAirQuality);
@@ -369,7 +635,7 @@ function updateAllDisplays() {
     const efficiencyFill = document.getElementById('efficiency-fill');
     if (efficiencyFill) {
         efficiencyFill.style.width = Math.min(efficiency, 100) + '%';
-        console.log('Efficiency bar updated to:', efficiency + '%');
+        Logger.log('Efficiency bar updated to:', efficiency + '%');
     }
     
     // Update efficiency value color
@@ -404,9 +670,9 @@ function updateElementText(elementId, text) {
     const element = document.getElementById(elementId);
     if (element) {
         element.textContent = text;
-        console.log(`Updated ${elementId}: ${text}`);
+        Logger.log(`Updated ${elementId}: ${text}`);
     } else {
-        console.warn(`Element not found: ${elementId}`);
+        Logger.warn(`Element not found: ${elementId}`);
     }
 }
 
@@ -428,14 +694,14 @@ function updateButtonStates() {
             fanStatusIndicator.textContent = 'Fan is ON';
             fanStatusIndicator.style.background = 'var(--success)';
             fanStatusElement.innerHTML = "<i class='fas fa-fan'></i> ON";
-            console.log('Fan state: ON');
+            Logger.log('Fan state: ON');
         } else {
             fanBtn.classList.remove('active');
             fanBtnText.textContent = 'Turn ON';
             fanStatusIndicator.textContent = 'Fan is OFF';
             fanStatusIndicator.style.background = 'var(--danger)';
             fanStatusElement.innerHTML = "<i class='fas fa-fan'></i> OFF";
-            console.log('Fan state: OFF');
+            Logger.log('Fan state: OFF');
         }
     }
 
@@ -447,14 +713,14 @@ function updateButtonStates() {
             modeStatusIndicator.textContent = 'Auto Mode Active';
             modeStatusIndicator.style.background = 'var(--accent)';
             autoStatusElement.innerHTML = "<i class='fas fa-robot'></i> AUTO";
-            console.log('Auto mode: ON');
+            Logger.log('Auto mode: ON');
         } else {
             modeBtn.classList.remove('active');
             modeBtnText.textContent = 'Switch to Auto';
             modeStatusIndicator.textContent = 'Manual Mode Active';
             modeStatusIndicator.style.background = 'var(--secondary)';
             autoStatusElement.innerHTML = "<i class='fas fa-hand-pointer'></i> MANUAL";
-            console.log('Auto mode: OFF');
+            Logger.log('Auto mode: OFF');
         }
     }
 }
@@ -462,33 +728,33 @@ function updateButtonStates() {
 // Update only the gauge needles (keep values hidden)
 function updateGaugeNeedle(type, value) {
     const needle = document.getElementById(`${type}-gauge-needle`);
-    console.log(`Updating ${type} gauge needle - Element:`, needle, 'Value:', value);
+    Logger.log(`Updating ${type} gauge needle - Element:`, needle, 'Value:', value);
 
     if (needle) {
         const rotation = Math.min(Math.max(value / 2000 * 180, 0), 180);
         needle.style.transform = `translateX(-50%) rotate(${rotation}deg)`;
-        console.log(`${type} gauge needle rotated to: ${rotation}deg`);
+        Logger.log(`${type} gauge needle rotated to: ${rotation}deg`);
         
         // Force browser repaint to ensure the transform is applied
         needle.offsetHeight;
     } else {
-        console.warn(`${type} gauge needle element not found`);
+        Logger.warn(`${type} gauge needle element not found`);
     }
 }
 
 function updateEfficiencyGaugeNeedle(value) {
     const needle = document.getElementById('efficiency-gauge-needle');
-    console.log('Updating efficiency gauge needle - Element:', needle, 'Value:', value);
+    Logger.log('Updating efficiency gauge needle - Element:', needle, 'Value:', value);
 
     if (needle) {
         const rotation = Math.min(Math.max(value / 100 * 180, 0), 180);
         needle.style.transform = `translateX(-50%) rotate(${rotation}deg)`;
-        console.log(`Efficiency gauge needle rotated to: ${rotation}deg`);
+        Logger.log(`Efficiency gauge needle rotated to: ${rotation}deg`);
         
         // Force browser repaint to ensure the transform is applied
         needle.offsetHeight;
     } else {
-        console.warn('Efficiency gauge needle element not found');
+        Logger.warn('Efficiency gauge needle element not found');
     }
 }
 
@@ -502,7 +768,7 @@ function updateValueColor(elementId, value) {
         } else {
             element.style.color = 'var(--danger)';
         }
-        console.log(`Updated ${elementId} color for value: ${value}`);
+        Logger.log(`Updated ${elementId} color for value: ${value}`);
     }
 }
 
@@ -521,7 +787,7 @@ function updateComparisonChart() {
         outputBar.style.height = outputHeight + '%';
         improvementElement.textContent = Math.round(improvement);
         
-        console.log(`Comparison chart updated - Input: ${inputHeight}%, Output: ${outputHeight}%, Improvement: ${improvement}PPM`);
+        Logger.log(`Comparison chart updated - Input: ${inputHeight}%, Output: ${outputHeight}%, Improvement: ${improvement}PPM`);
     }
 }
 
@@ -550,7 +816,7 @@ function updateLastUpdated() {
     
     lastUpdateTime = now;
     
-    console.log('Last updated display refreshed', { 
+    Logger.log('Last updated display refreshed', { 
         systemMode, 
         displayText, 
         lastUpdateTime: lastUpdateTime.toLocaleTimeString() 
@@ -558,7 +824,7 @@ function updateLastUpdated() {
 }
 
 function toggleFan() {
-    console.log('Toggle fan clicked. Current state:', fanState);
+    Logger.log('Toggle fan clicked. Current state:', fanState);
     
     if (systemMode === 'offline') {
         alert('Device is in offline mode. Controls may have limited functionality.');
@@ -566,73 +832,65 @@ function toggleFan() {
     
     if (autoMode === "ON") {
         autoMode = "OFF";
-        console.log('Switched to manual mode');
+        Logger.log('Switched to manual mode');
     }
     
     fanState = !fanState;
-    console.log('New fan state:', fanState);
+    Logger.log('New fan state:', fanState);
     
     sendCommand('fan', fanState ? 'on' : 'off');
     updateButtonStates();
 }
 
 function toggleMode() {
-    console.log('Toggle mode clicked. Current mode:', autoMode);
+    Logger.log('Toggle mode clicked. Current mode:', autoMode);
     
     autoMode = autoMode === "ON" ? "OFF" : "ON";
-    console.log('New mode:', autoMode);
+    Logger.log('New mode:', autoMode);
     
     updateButtonStates();
     sendCommand('auto', autoMode === 'ON' ? 'ON' : 'OFF');
 }
 
 function saveThreshold() {
-    console.log('Save threshold clicked. Threshold:', threshold);
+    Logger.log('Save threshold clicked. Threshold:', threshold);
     sendCommand('threshold', threshold);
 }
 
 function updateThreshold(e) {
     threshold = parseInt(e.target.value);
     updateElementText('threshold-value', threshold);
-    console.log('Threshold updated to:', threshold);
+    Logger.log('Threshold updated to:', threshold);
 }
 
 function sendCommand(command, value) {
     const deviceId = getCurrentDeviceId();
-    const token = localStorage.getItem('authToken');
-    console.log('Sending command via database API:', { command, value, deviceId });
+    Logger.log('Sending command via database API:', { command, value, deviceId });
     
-    fetch('/api/command', {
+    apiFetch('/api/command', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        credentials: 'include',
         body: JSON.stringify({
             command: command,
             value: value,
             device_id: deviceId
         })
     })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Failed to send command');
-        }
-        return response.json();
-    })
     .then(data => {
-        console.log('Command sent successfully via database API:', data);
+        Logger.log('Command sent successfully via database API:', data);
         showCommandFeedback('Command sent successfully', 'success');
     })
     .catch(error => {
-        console.error('Error sending command via database API:', error);
-        showCommandFeedback('Command failed - device may be offline', 'error');
+        Logger.error('Error sending command via database API:', error);
+        if (error.message === 'Not authenticated' || error.message === 'Authentication failed') {
+            showCommandFeedback('Authentication required', 'error');
+        } else {
+            showCommandFeedback('Command failed - device may be offline', 'error');
+        }
     });
 }
 
 function showCommandFeedback(message, type) {
-    console.log('Showing command feedback:', { message, type });
+    Logger.log('Showing command feedback:', { message, type });
     
     let feedbackElement = document.getElementById('command-feedback');
     if (!feedbackElement) {
@@ -662,7 +920,7 @@ function showCommandFeedback(message, type) {
     }, 3000);
 }
 
-// History and statistics functions (remain the same)
+// History and statistics functions (simplified)
 function addToHistory(data) {
     historyData.unshift(data);
     if (historyData.length > 50) {

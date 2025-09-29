@@ -67,6 +67,11 @@ router.get('/profile', generalLimiter, userController.getProfile);
 router.put('/profile', generalLimiter, validateUserUpdate, userController.updateProfile);
 router.post('/auth/change-password', generalLimiter, userController.changePassword);
 
+// Token refresh and logout routes
+router.post('/auth/refresh', generalLimiter, authController.refreshToken);
+router.post('/auth/logout', generalLimiter, authController.logout);
+router.post('/auth/logout-all', generalLimiter, authController.logoutAll);
+
 // Device management (user's devices)
 router.post('/devices/register', generalLimiter, validateDeviceRegistration, deviceController.registerDevice);
 router.get('/devices/my-devices', generalLimiter, deviceController.getUserDevices);
@@ -89,6 +94,11 @@ router.post('/command', generalLimiter, deviceController.sendCommand);
 router.get('/settings', generalLimiter, settingsController.getSettings);
 router.get('/settings/:deviceId', generalLimiter, settingsController.getDeviceSettings);
 
+// Device sharing routes (for all authenticated users)
+router.post('/devices/share', generalLimiter, deviceController.shareDevice);
+router.get('/devices/shared', generalLimiter, deviceController.getSharedDevices);
+router.delete('/devices/shared/:share_id', generalLimiter, deviceController.unshareDevice);
+
 // ===== ADMIN-ONLY ROUTES =====
 router.use(adminAuth); // Apply admin auth to all routes below
 
@@ -102,9 +112,59 @@ router.delete('/devices/:deviceId', generalLimiter, deviceController.deleteDevic
 // Settings management (admin only)
 router.put('/settings/:deviceId', generalLimiter, validateSettings, settingsController.updateSettings);
 
-// User management (admin only)
-router.get('/users', generalLimiter, userController.getUsers);
+
+// Add this route BEFORE the auth middleware (in the public routes section)
+router.get('/user', auth, async (req, res) => {
+  try {
+    const { db } = require('../config/database');
+    
+    db.get('SELECT id, username, is_admin FROM users WHERE id = ?', [req.userId], (err, user) => {
+      if (err) {
+        console.error('Database error in /api/user:', err);
+        return res.status(500).json({ 
+          success: false, 
+          error: 'Database error' 
+        });
+      }
+      
+      if (!user) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'User not found' 
+        });
+      }
+      
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          username: user.username,
+          is_admin: user.is_admin === 1
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Error in /api/user endpoint:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// Add this to your api.js for debugging
+router.get('/api/debug-auth', auth, (req, res) => {
+  res.json({
+    success: true,
+    message: 'Authentication working!',
+    user: {
+      id: req.userId,
+      authenticated: true
+    }
+  });
+});
 router.post('/users', generalLimiter, validateUser, userController.createUser);
+
 router.put('/users/:id', generalLimiter, validateUserUpdate, userController.updateUser);
 router.delete('/users/:id', generalLimiter, userController.deleteUser);
 
