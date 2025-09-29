@@ -17,6 +17,14 @@ const userController = require('../controllers/userController');
 const deviceController = require('../controllers/deviceController');
 const settingsController = require('../controllers/settingsController');
 
+
+router.use((req, res, next) => {
+  console.log(`[API DEBUG] ${req.method} ${req.path}`);
+  console.log('[API DEBUG] Body:', req.body);
+  console.log('[API DEBUG] Headers:', req.headers);
+  next();
+});
+
 // ===== PUBLIC ROUTES =====
 router.post('/auth/register', authLimiter, validateUser, authController.register);
 router.post('/auth/login', authLimiter, validateUser, authController.login);
@@ -58,6 +66,13 @@ router.post('/readings', dataLimiter, readingsController.storeESP32Reading);
 router.get('/data', dataLimiter, deviceController.getDeviceData);
 router.get('/commands/pending', dataLimiter, deviceController.getPendingCommands);
 router.put('/commands/:commandId/status', dataLimiter, deviceController.updateCommandStatus);
+router.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    service: 'airpurifier-backend'
+  });
+});
 
 // ===== AUTHENTICATED ROUTES (Web interface) =====
 router.use(auth); // Apply auth to all routes below

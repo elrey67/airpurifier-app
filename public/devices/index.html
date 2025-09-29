@@ -80,6 +80,67 @@
     </div>
   </div>
 
+  <!-- Share Device Modal -->
+<div id="share-device-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-share-alt"></i> Share Device</h3>
+            <button class="modal-close" id="share-modal-close">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p>Share <strong id="share-device-name">Device Name</strong> with another user</p>
+            <div class="form-group">
+                <label for="share-username"><i class="fas fa-user"></i> Username *</label>
+                <input type="text" id="share-username" placeholder="Enter username to share with" required>
+                <small>The user must have an account on this system</small>
+            </div>
+            <div class="share-info">
+                <i class="fas fa-info-circle"></i>
+                <span>User will have view-only access to monitor this device</span>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="share-modal-cancel">Cancel</button>
+            <button type="button" class="btn btn-primary" id="share-device-confirm">
+                <i class="fas fa-share-alt"></i> Share Device
+            </button>
+        </div>
+    </div>
+</div>
+<!-- Delete Device Confirmation Modal -->
+<div id="delete-device-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-exclamation-triangle"></i> Delete Device</h3>
+            <button class="modal-close" id="delete-modal-close">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="delete-warning">
+                <i class="fas fa-exclamation-circle"></i>
+                <p>Are you sure you want to delete <strong id="delete-device-name">Device Name</strong>?</p>
+            </div>
+            <div class="delete-consequences">
+                <p><strong>This action cannot be undone and will permanently:</strong></p>
+                <ul>
+                    <li>Remove the device from your account</li>
+                    <li>Delete all device data and history</li>
+                    <li>Remove access for any shared users</li>
+                </ul>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="delete-modal-cancel">Cancel</button>
+            <button type="button" class="btn btn-danger" id="delete-device-confirm">
+                <i class="fas fa-trash"></i> Delete Device
+            </button>
+        </div>
+    </div>
+</div>
+
   <script src="../assets/js/devices.js"></script>
 </body>
 </html>

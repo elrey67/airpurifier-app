@@ -542,15 +542,30 @@ exports.getSystemStatus = async (req, res) => {
 };
 
 // Simple device registration - user provides all details
+// Updated device registration - accepts frontend field names
 exports.registerDevice = async (req, res) => {
   try {
-    const { name, location, username, password } = req.body;
-    const userId = req.userId; // This comes from auth middleware
+    const { 
+      device_id, 
+      device_name, 
+      location, 
+      username, 
+      password 
+    } = req.body;
+    
+    const userId = req.userId;
 
     console.log('🔍 Device registration called by user:', userId);
+    console.log('📦 Received data:', {
+      device_id,
+      device_name, 
+      location, 
+      username, 
+      password: password ? '***REDACTED***' : 'empty'
+    });
 
-    // Basic validation
-    if (!name || !location || !username || !password) {
+    // Basic validation - using the frontend field names
+    if (!device_name || !location || !username || !password) {
       return res.status(400).json({ 
         error: 'Device name, location, username, and password are required' 
       });
@@ -562,91 +577,90 @@ exports.registerDevice = async (req, res) => {
       });
     }
 
-    // Generate unique device ID
-    const deviceId = 'esp32_' + Math.random().toString(36).substring(2, 8) + '_' + Date.now().toString(36);
+    // Use the device_id from frontend or generate one if not provided
+    const finalDeviceId = device_id || 'esp32_' + Math.random().toString(36).substring(2, 8) + '_' + Date.now().toString(36);
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 12);
+    console.log('🎯 Using device ID:', finalDeviceId);
 
     // Start database transaction
     database.db.serialize(() => {
-      // 1. Check if username already exists
-      database.db.get(
-        'SELECT id FROM users WHERE username = ?',
-        [username],
-        (err, existingUser) => {
+      // Create device record with device-specific credentials
+      database.db.run(
+        'INSERT INTO devices (device_id, name, location, user_id, device_username, device_password) VALUES (?, ?, ?, ?, ?, ?)',
+        [finalDeviceId, device_name, location, userId, username, password],
+        function(err) {
           if (err) {
-            console.error('Database error checking username:', err);
-            return res.status(500).json({ error: 'Database error' });
+            console.error('❌ Database error creating device:', err);
+            
+            // Handle duplicate device_id
+            if (err.code === 'SQLITE_CONSTRAINT' || err.message.includes('UNIQUE constraint failed')) {
+              return res.status(400).json({ 
+                error: 'Device ID already exists. Please choose a different one.' 
+              });
+            }
+            
+            return res.status(500).json({ error: 'Failed to create device: ' + err.message });
           }
           
-          if (existingUser) {
-            return res.status(400).json({ error: 'Username already exists' });
-          }
-
-          // 2. Create user account for the device
+          console.log('✅ Device record created with ID:', finalDeviceId);
+          
+          // Create default settings
           database.db.run(
-            'INSERT INTO users (username, password, is_admin) VALUES (?, ?, ?)',
-            [username, hashedPassword, false],
+            'INSERT INTO settings (device_id, threshold) VALUES (?, ?)',
+            [finalDeviceId, 300],
             function(err) {
               if (err) {
-                console.error('Error creating device user:', err);
-                return res.status(500).json({ error: 'Failed to create device user' });
+                console.error('❌ Error creating default settings:', err);
+              } else {
+                console.log('✅ Default settings created');
               }
-              
-              const deviceUserId = this.lastID;
-              
-              // 3. Create device record - ASSIGN TO CURRENT USER
-              database.db.run(
-                'INSERT INTO devices (device_id, name, location, user_id) VALUES (?, ?, ?, ?)',
-                [deviceId, name, location, userId], // Use the current user's ID
-                function(err) {
-                  if (err) {
-                    console.error('Error creating device:', err);
-                    return res.status(500).json({ error: 'Failed to create device' });
-                  }
-                  
-                  // 4. Create default settings
-                  database.db.run(
-                    'INSERT INTO settings (device_id, threshold) VALUES (?, ?)',
-                    [deviceId, 300]
-                  );
-                  
-                  // 5. Create initial status
-                  database.db.run(
-                    `INSERT INTO current_status 
-                     (device_id, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, online, last_seen) 
-                     VALUES (?, 0, 0, 0, FALSE, TRUE, FALSE, datetime('now'))`,
-                    [deviceId]
-                  );
-                  
-                  // Return success
-                  res.status(201).json({
-                    success: true,
-                    message: 'Device registered successfully',
-                    device: {
-                      device_id: deviceId,
-                      name: name,
-                      location: location,
-                      username: username,
-                      created_at: new Date().toISOString()
-                    }
-                  });
-                }
-              );
             }
           );
+          
+          // Create initial status
+          database.db.run(
+            `INSERT INTO current_status 
+             (device_id, system_mode, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode, online, last_seen) 
+             VALUES (?, 'offline', 0, 0, 0, FALSE, TRUE, FALSE, datetime('now'))`,
+            [finalDeviceId],
+            function(err) {
+              if (err) {
+                console.error('❌ Error creating initial status:', err);
+              } else {
+                console.log('✅ Initial status created');
+              }
+            }
+          );
+          
+          // Return success with the same field names frontend expects
+          res.status(201).json({
+            success: true,
+            message: 'Device registered successfully',
+            device: {
+              device_id: finalDeviceId,
+              device_name: device_name,
+              name: device_name, // Also include for compatibility
+              location: location,
+              username: username, // Return device credentials
+              password: password, // Return for immediate use
+              created_at: new Date().toISOString()
+            }
+          });
         }
       );
     });
 
   } catch (error) {
-    console.error('Error in registerDevice:', error);
-    res.status(500).json({ error: 'Failed to register device' });
+    console.error('💥 Unexpected error in registerDevice:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to register device: ' + error.message 
+    });
   }
 };
 
 // Get user's devices
+// Get user's devices - UPDATED VERSION
 exports.getUserDevices = (req, res) => {
   try {
     console.log('🔍 getUserDevices called');
@@ -662,20 +676,18 @@ exports.getUserDevices = (req, res) => {
       });
     }
 
-    // Get both owned devices AND shared devices
+    // UPDATED SQL - Get credentials from devices table
     const sql = `
       -- Owned devices
       SELECT 
         d.*, 
         cs.online, 
         cs.system_mode, 
-        cs.last_seen, 
-        u.username as device_username,
+        cs.last_seen,
         'owner' as access_type,
         NULL as shared_by_username
       FROM devices d 
       LEFT JOIN current_status cs ON d.device_id = cs.device_id
-      LEFT JOIN users u ON d.user_id = u.id
       WHERE d.user_id = ?
       
       UNION ALL
@@ -685,21 +697,19 @@ exports.getUserDevices = (req, res) => {
         d.*, 
         cs.online, 
         cs.system_mode, 
-        cs.last_seen, 
-        u.username as device_username,
+        cs.last_seen,
         'shared_view' as access_type,
         owner_u.username as shared_by_username
       FROM device_sharing ds
       JOIN devices d ON ds.device_id = d.device_id
       LEFT JOIN current_status cs ON d.device_id = cs.device_id
-      LEFT JOIN users u ON d.user_id = u.id
       LEFT JOIN users owner_u ON ds.owner_user_id = owner_u.id
       WHERE ds.shared_user_id = ? AND ds.permissions = 'view_only'
       
       ORDER BY created_at DESC
     `;
 
-    console.log('🚀 Executing SQL query for owned + shared devices for user:', userId);
+    console.log('🚀 Executing UPDATED SQL query');
     
     database.db.all(sql, [userId, userId], (err, rows) => {
       if (err) {
@@ -721,25 +731,26 @@ exports.getUserDevices = (req, res) => {
       }
 
       // Process the devices
-      const devices = rows.map(device => {
-        return {
-          device_id: device.device_id,
-          name: device.name,
-          location: device.location,
-          online: device.online === 1,
-          system_mode: device.system_mode,
-          last_seen: device.last_seen,
-          created_at: device.created_at,
-          device_username: device.device_username,
-          access_type: device.access_type, // 'owner' or 'shared_view'
-          shared_by_username: device.shared_by_username, // who shared it
-          is_shared: device.access_type === 'shared_view', // easy check
-          can_edit: device.access_type === 'owner' // only owners can edit
-        };
-      });
+const devices = rows.map(device => {
+  return {
+    device_id: device.device_id,
+    name: device.name,
+    location: device.location,
+    online: device.online === 1,
+    system_mode: device.system_mode,
+    last_seen: device.last_seen,
+    created_at: device.created_at,
+    // Only return credentials to device owners, not shared users
+    device_username: device.access_type === 'owner' ? device.device_username : undefined,
+    password: device.access_type === 'owner' ? device.device_password : undefined,
+    access_type: device.access_type,
+    shared_by_username: device.shared_by_username,
+    is_shared: device.access_type === 'shared_view',
+    can_edit: device.access_type === 'owner'
+  };
+});
 
-      console.log('🎯 Sending response with devices:', devices.length);
-      console.log('📊 Access types:', devices.map(d => ({ name: d.name, access: d.access_type })));
+      console.log('🎯 Sending response with device-specific credentials');
       
       res.json({
         success: true,
@@ -753,6 +764,44 @@ exports.getUserDevices = (req, res) => {
       success: false,
       error: 'Unexpected server error: ' + error.message 
     });
+  }
+};
+
+// Temporary function to update existing devices with credentials
+exports.updateExistingDevices = (req, res) => {
+  try {
+    // For each existing device, set default credentials
+    database.db.all('SELECT device_id, name FROM devices WHERE device_username IS NULL', (err, devices) => {
+      if (err) {
+        console.error('Error fetching devices:', err);
+        return res.status(500).json({ error: 'Database error' });
+      }
+
+      devices.forEach(device => {
+        const defaultUsername = device.device_id.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+        const defaultPassword = 'device123'; // Default password
+        
+        database.db.run(
+          'UPDATE devices SET device_username = ?, device_password = ? WHERE device_id = ?',
+          [defaultUsername, defaultPassword, device.device_id],
+          function(err) {
+            if (err) {
+              console.error(`Error updating device ${device.device_id}:`, err);
+            } else {
+              console.log(`✅ Updated device ${device.device_id} with credentials`);
+            }
+          }
+        );
+      });
+
+      res.json({
+        success: true,
+        message: `Updating ${devices.length} devices with default credentials`
+      });
+    });
+  } catch (error) {
+    console.error('Error in updateExistingDevices:', error);
+    res.status(500).json({ error: 'Failed to update devices' });
   }
 };
 

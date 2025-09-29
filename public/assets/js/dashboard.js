@@ -1,3 +1,5 @@
+// dashboard.js - Fixed with proper authentication handling and improved logging
+
 // System state
 let systemMode = 'offline';
 let inputAirQuality = 0;
@@ -13,7 +15,7 @@ let lastSuccessfulUpdate = null;
 let connectionRetries = 0;
 let lastConnectionStatus = '';
 
-// Environment-based logger
+// Environment-based logger for dashboard page (matching devices.js standard)
 const Logger = {
     getEnvironment: function() {
         const hostname = window.location.hostname;
@@ -58,32 +60,6 @@ const Logger = {
     }
 };
 
-// Check if user is authenticated
-function isAuthenticated() {
-    const token = localStorage.getItem('authToken');
-    if (!token || token === 'null' || token === 'undefined') {
-        Logger.warn('No valid authentication token found');
-        return false;
-    }
-    
-    try {
-        // Check if token is expired
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        const expirationTime = payload.exp * 1000;
-        const currentTime = Date.now();
-        
-        if (expirationTime <= currentTime) {
-            Logger.warn('Authentication token has expired');
-            return false;
-        }
-        
-        return true;
-    } catch (error) {
-        Logger.error('Error validating token:', error);
-        return false;
-    }
-}
-
 // Get base URL with proper protocol
 function getBaseURL() {
     const protocol = window.location.protocol;
@@ -94,36 +70,38 @@ function getBaseURL() {
     return `${protocol}//${hostname}${port ? ':' + port : ''}`;
 }
 
-// Enhanced fetch with automatic token refresh
+// Enhanced fetch with proper token handling - MATCHING DEVICES.JS STANDARD
 async function apiFetch(endpoint, options = {}) {
     const baseURL = getBaseURL();
-    let token = localStorage.getItem('authToken');
-    
-    // Check authentication first
-    if (!token || token === 'null' || token === 'undefined') {
-        Logger.warn('No authentication token available, redirecting to login');
-        redirectToLogin();
-        throw new Error('Not authenticated');
-    }
+    const token = localStorage.getItem('authToken');
     
     Logger.log('API fetch request', { 
         endpoint, 
         baseURL,
-        hasToken: !!token 
+        hasToken: !!token
     });
     
-    const defaultOptions = {
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        credentials: 'include'
-    };
-    
     try {
+        const defaultOptions = {
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include'
+        };
+        
+        // Add Authorization header if we have a token - MATCHING DEVICES.JS PATTERN
+        if (token) {
+            defaultOptions.headers['Authorization'] = `Bearer ${token}`;
+            Logger.log('Adding Authorization header with Bearer token');
+        }
+        
         const response = await fetch(`${baseURL}${endpoint}`, {
             ...defaultOptions,
-            ...options
+            ...options,
+            headers: {
+                ...defaultOptions.headers,
+                ...options.headers
+            }
         });
         
         Logger.log('API response received', {
@@ -132,44 +110,10 @@ async function apiFetch(endpoint, options = {}) {
             statusText: response.statusText
         });
         
-        // Handle token expiration (401 Unauthorized)
         if (response.status === 401) {
-            Logger.warn('Token expired or invalid, attempting refresh');
-            
-            // Try to refresh the token
-            const refreshSuccess = await refreshToken();
-            if (refreshSuccess) {
-                // Retry the request with new token
-                token = localStorage.getItem('authToken');
-                defaultOptions.headers.Authorization = `Bearer ${token}`;
-                
-                const retryResponse = await fetch(`${baseURL}${endpoint}`, {
-                    ...defaultOptions,
-                    ...options
-                });
-                
-                if (!retryResponse.ok) {
-                    if (retryResponse.status === 401) {
-                        Logger.error('Token refresh failed, redirecting to login');
-                        redirectToLogin();
-                        throw new Error('Authentication failed');
-                    }
-                    throw new Error(`Request failed with status ${retryResponse.status}`);
-                }
-                
-                const data = await retryResponse.json();
-                Logger.log('API request successful after token refresh', {
-                    endpoint,
-                    data: Logger.sanitizeData(data)
-                });
-                
-                return data;
-            } else {
-                // Refresh failed, redirect to login
-                Logger.error('Token refresh failed, redirecting to login');
-                redirectToLogin();
-                throw new Error('Authentication failed');
-            }
+            Logger.warn('Authentication failed, redirecting to login');
+            handleUnauthenticatedState();
+            throw new Error('Authentication required');
         }
         
         if (!response.ok) {
@@ -200,6 +144,162 @@ async function apiFetch(endpoint, options = {}) {
     } catch (error) {
         Logger.error(`API call failed for ${endpoint}`, error);
         throw error;
+    }
+}
+
+// Authentication check - MATCHING DEVICES.JS PATTERN
+async function checkAuthentication() {
+    try {
+        Logger.log('Checking authentication status...');
+        
+        const token = localStorage.getItem('authToken');
+        if (!token) {
+            Logger.warn('No auth token found');
+            handleUnauthenticatedState();
+            return false;
+        }
+        
+        const baseURL = getBaseURL();
+        const response = await fetch(`${baseURL}/api/user`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include'
+        });
+
+        Logger.log('Response from /api/user:', {
+            status: response.status,
+            ok: response.ok
+        });
+
+        if (response.status === 401) {
+            Logger.warn('User not authenticated');
+            handleUnauthenticatedState();
+            return false;
+        }
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        Logger.log('User data received:', data);
+
+        if (!data.success || !data.user || !data.user.username) {
+            throw new Error(`Invalid user data received: ${JSON.stringify(data)}`);
+        }
+
+        // Update UI for authenticated user
+        updateUIForAuthenticatedUser(data.user);
+        Logger.info('User authenticated', { username: data.user.username });
+        return true;
+    } catch (error) {
+        Logger.error('Auth check failed:', error);
+        handleUnauthenticatedState();
+        return false;
+    }
+}
+
+function updateUIForAuthenticatedUser(user) {
+    const username = user.username || 'User';
+    Logger.log('Updating UI for authenticated user:', username);
+
+    const usernameDisplay = document.getElementById('username-display');
+    if (usernameDisplay) {
+        usernameDisplay.textContent = username;
+    }
+    
+    // Update localStorage for consistency
+    localStorage.setItem('isAuthenticated', 'true');
+    localStorage.setItem('username', username);
+    document.body.classList.add('user-authenticated');
+}
+
+function handleUnauthenticatedState() {
+    Logger.warn('Handling unauthenticated state');
+    
+    localStorage.removeItem('isAuthenticated');
+    localStorage.removeItem('username');
+    localStorage.removeItem('authToken');
+    document.body.classList.remove('user-authenticated');
+    
+    // Redirect to login with current page as redirect target
+    const currentPath = window.location.pathname + window.location.search;
+    window.location.href = `/auth/login.html?redirect=${encodeURIComponent(currentPath)}`;
+}
+
+// Check if user is authenticated
+function isAuthenticated() {
+    const token = localStorage.getItem('authToken');
+    if (!token || token === 'null' || token === 'undefined') {
+        Logger.warn('No valid authentication token found');
+        return false;
+    }
+    
+    try {
+        // Check if token is expired
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const expirationTime = payload.exp * 1000;
+        const currentTime = Date.now();
+        
+        if (expirationTime <= currentTime) {
+            Logger.warn('Authentication token has expired');
+            return false;
+        }
+        
+        return true;
+    } catch (error) {
+        Logger.error('Error validating token:', error);
+        return false;
+    }
+}
+
+// Add logout functionality - MATCHING DEVICES.JS PATTERN
+async function logoutUser() {
+    Logger.info('User logging out');
+    
+    try {
+        const refreshToken = localStorage.getItem('refreshToken');
+        
+        await apiFetch('/api/auth/logout', {
+            method: 'POST',
+            body: JSON.stringify({
+                refreshToken: refreshToken
+            })
+        });
+        
+        Logger.info('Logout API call successful');
+    } catch (error) {
+        Logger.error('Logout API call failed:', error);
+    } finally {
+        // Always clear local storage and redirect regardless of API success/failure
+        localStorage.clear();
+        window.location.href = '/login';
+    }
+}
+
+// Check token expiration on page load
+function checkTokenExpiration() {
+    const token = localStorage.getItem('authToken');
+    if (token && token !== 'null' && token !== 'undefined') {
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            const expirationTime = payload.exp * 1000; // Convert to milliseconds
+            const currentTime = Date.now();
+            
+            // If token expires in less than 5 minutes, refresh it
+            if (expirationTime - currentTime < 5 * 60 * 1000) {
+                Logger.log('Token expiring soon, refreshing...');
+                refreshToken();
+            }
+        } catch (error) {
+            Logger.error('Error checking token expiration', error);
+            // If token is malformed, remove it and redirect
+            localStorage.removeItem('authToken');
+            handleUnauthenticatedState();
+        }
     }
 }
 
@@ -245,131 +345,60 @@ async function refreshToken() {
     }
 }
 
-// Redirect to login
-function redirectToLogin() {
-    Logger.info('Redirecting to login page');
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('currentDevice');
-    localStorage.removeItem('currentDeviceName');
-    
-    // Show a user-friendly message
-    showAuthError();
-    
-    // Redirect after a short delay
-    setTimeout(() => {
-        window.location.href = '/auth/login.html';
-    }, 2000);
-}
-
-// Show authentication error message
-function showAuthError() {
-    // Create or update error message
-    let errorElement = document.getElementById('auth-error-message');
-    if (!errorElement) {
-        errorElement = document.createElement('div');
-        errorElement.id = 'auth-error-message';
-        errorElement.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: #dc3545;
-            color: white;
-            padding: 20px 30px;
-            border-radius: 8px;
-            z-index: 10001;
-            font-size: 16px;
-            font-weight: bold;
-            text-align: center;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-        `;
-        document.body.appendChild(errorElement);
-    }
-    
-    errorElement.innerHTML = `
-        <div>⚠️ Session Expired</div>
-        <div style="font-size: 14px; margin-top: 10px;">
-            Please log in again. Redirecting to login page...
-        </div>
-    `;
-    errorElement.style.display = 'block';
-}
-
-// Add logout functionality
-function logout() {
-    Logger.info('User initiated logout');
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('currentDevice');
-    localStorage.removeItem('currentDeviceName');
-    window.location.href = '/auth/login.html';
-}
-
-// Check token expiration on page load
-function checkTokenExpiration() {
-    const token = localStorage.getItem('authToken');
-    if (token && token !== 'null' && token !== 'undefined') {
-        try {
-            const payload = JSON.parse(atob(token.split('.')[1]));
-            const expirationTime = payload.exp * 1000; // Convert to milliseconds
-            const currentTime = Date.now();
-            
-            // If token expires in less than 5 minutes, refresh it
-            if (expirationTime - currentTime < 5 * 60 * 1000) {
-                Logger.log('Token expiring soon, refreshing...');
-                refreshToken();
-            }
-        } catch (error) {
-            Logger.error('Error checking token expiration', error);
-            // If token is malformed, remove it and redirect
-            localStorage.removeItem('authToken');
-            redirectToLogin();
-        }
-    }
-}
-
-// Initialize the page
+// Initialize the page - IMPROVED WITH BETTER LOGGING
 document.addEventListener('DOMContentLoaded', function() {
-    Logger.log('DOM loaded, initializing air purifier dashboard...');
-    
-    // Check authentication first
-    if (!isAuthenticated()) {
-        Logger.warn('User not authenticated, redirecting to login');
-        redirectToLogin();
-        return;
-    }
-    
-    // Check token expiration on load
-    checkTokenExpiration();
-    
-    initializeEventListeners();
-    updateConnectionStatus('reconnecting', 'Checking system mode...');
-    
-    // Show server URL in footer
-    const serverUrlElement = document.getElementById('server-url');
-    if (serverUrlElement) {
-        serverUrlElement.textContent = window.location.hostname;
-    }
-    
-    // Add logout button functionality if it exists
-    const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', logout);
-        Logger.log('Logout button initialized');
-    }
-    
-    // Initial update
-    setTimeout(() => {
-        checkSystemMode();
-    }, 100);
-    
-    // Set up periodic updates
-    setInterval(updateData, 2000);
-    
-    // Check token expiration every minute
-    setInterval(checkTokenExpiration, 60 * 1000);
+    Logger.log('Dashboard page loaded');
+    initializeDashboard();
 });
+
+// Initialize the dashboard page - NEW FUNCTION MATCHING DEVICES.JS STRUCTURE
+async function initializeDashboard() {
+    try {
+        const isAuth = await checkAuthentication();
+        if (!isAuth) {
+            Logger.warn('User not authenticated, redirecting to login');
+            return;
+        }
+        
+        // Check token expiration on load
+        checkTokenExpiration();
+        
+        initializeEventListeners();
+        updateConnectionStatus('reconnecting', 'Checking system mode...');
+        
+        // Show server URL in footer
+        const serverUrlElement = document.getElementById('server-url');
+        if (serverUrlElement) {
+            serverUrlElement.textContent = window.location.hostname;
+        }
+        
+        // Add logout button functionality if it exists
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                logoutUser();
+            });
+            Logger.log('Logout button initialized');
+        }
+        
+        // Initial update
+        setTimeout(() => {
+            checkSystemMode();
+        }, 100);
+        
+        // Set up periodic updates
+        setInterval(updateData, 2000);
+        
+        // Check token expiration every minute
+        setInterval(checkTokenExpiration, 60 * 1000);
+        
+        Logger.info('Dashboard initialized successfully');
+    } catch (error) {
+        Logger.error('Failed to initialize dashboard page', error);
+        handleUnauthenticatedState();
+    }
+}
 
 function initializeEventListeners() {
     Logger.log('Initializing event listeners...');
@@ -423,14 +452,15 @@ function initializeEventListeners() {
 
 // Get the device ID
 function getCurrentDeviceId() {
-    return 'esp32_air_purifier_01';
+    const deviceId = localStorage.getItem('currentDevice') || 'esp32_air_purifier_01';
+    Logger.log('Getting current device ID:', deviceId);
+    return deviceId;
 }
 
 function checkSystemMode() {
     // Check authentication before making API calls
     if (!isAuthenticated()) {
         Logger.warn('Not authenticated, cannot check system mode');
-        redirectToLogin();
         return;
     }
 
@@ -459,7 +489,7 @@ function checkSystemMode() {
         Logger.error('Error checking system mode:', error);
         systemMode = 'offline';
         lastConnectionStatus = 'offline';
-        if (error.message === 'Not authenticated' || error.message === 'Authentication failed') {
+        if (error.message === 'Authentication required') {
             updateConnectionStatus('error', 'Authentication required');
         } else {
             updateConnectionStatus('error', 'Failed to connect to database');
@@ -505,7 +535,7 @@ function updateData() {
     .catch(error => {
         Logger.error('Error fetching data:', error);
         
-        if (error.message === 'Not authenticated' || error.message === 'Authentication failed') {
+        if (error.message === 'Authentication required') {
             updateConnectionStatus('error', 'Authentication required');
             // Don't increment retries for auth errors
             return;
@@ -881,7 +911,7 @@ function sendCommand(command, value) {
     })
     .catch(error => {
         Logger.error('Error sending command via database API:', error);
-        if (error.message === 'Not authenticated' || error.message === 'Authentication failed') {
+        if (error.message === 'Authentication required') {
             showCommandFeedback('Authentication required', 'error');
         } else {
             showCommandFeedback('Command failed - device may be offline', 'error');
