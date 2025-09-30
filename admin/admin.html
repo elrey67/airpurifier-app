@@ -8,6 +8,31 @@
     <link rel="stylesheet" href="/admin/admin.css">
 </head>
 <body>
+    <!-- Mobile Menu Overlay -->
+    <div class="mobile-menu-overlay" id="mobile-menu-overlay"></div>
+
+    <!-- Mobile Menu Sidebar -->
+    <div class="mobile-menu-sidebar" id="mobile-menu-sidebar">
+        <div class="mobile-menu-header">
+            <h3><i class="fas fa-wind"></i> Admin Panel</h3>
+            <button class="mobile-menu-close" id="mobile-menu-close">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="mobile-menu-items">
+            <a href="/" class="mobile-nav-item">
+                <i class="fas fa-home"></i> Home
+            </a>
+            <a href="/admin" class="mobile-nav-item">
+                <i class="fas fa-users-cog"></i> User Management
+            </a>
+            <div class="mobile-nav-welcome">Welcome, <span id="mobile-user-greeting">Admin</span></div>
+            <a href="#" class="mobile-nav-item mobile-nav-logout" id="mobile-logout-btn">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </a>
+        </div>
+    </div>
+
     <div id="login-container" class="container">
         <div class="login-form">
             <h1><i class="fas fa-wind"></i> Air Purifier Admin</h1>
@@ -27,11 +52,20 @@
     </div>
 
     <div id="admin-container" class="container hidden">
+        <!-- Update Header with Mobile Toggle -->
         <header>
-            <h1><i class="fas fa-users-cog"></i> User Management</h1>
-            <div class="user-info">
-                <span id="user-greeting">Welcome, Admin</span>
-                <button id="logout-btn" class="btn btn-secondary">Logout</button>
+            <div class="header-content">
+                <button class="mobile-menu-toggle" id="mobile-menu-toggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <h1><i class="fas fa-users-cog"></i> User Management</h1>
+                <div class="user-info">
+                    <a href="/" class="btn btn-secondary home-btn">
+                        <i class="fas fa-home"></i> Home
+                    </a>
+                    <span id="user-greeting">Welcome, Admin</span>
+                    <button id="logout-btn" class="btn btn-secondary">Logout</button>
+                </div>
             </div>
         </header>
 

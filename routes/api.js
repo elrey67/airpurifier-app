@@ -116,6 +116,7 @@ router.delete('/devices/shared/:share_id', generalLimiter, deviceController.unsh
 
 // ===== ADMIN-ONLY ROUTES =====
 router.use(adminAuth); // Apply admin auth to all routes below
+router.get('/users', generalLimiter, userController.getUsers); 
 
 // Device management (admin only - all devices)
 router.get('/devices', generalLimiter, deviceController.getDevices);

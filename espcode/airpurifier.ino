@@ -183,6 +183,8 @@ bool authenticateBackend() {
     isAuthenticated = false;
   }
 
+  Serial.println("🔐 Attempting authentication...");
+
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(5000);
@@ -198,29 +200,52 @@ bool authenticateBackend() {
   
   String loginData = "{\"username\":\"" + String(backendUsername) + "\",\"password\":\"" + String(backendPassword) + "\"}";
   
+  Serial.println("📤 Sending login request...");
   int httpResponseCode = http.POST(loginData);
   String response = http.getString();
   http.end();
   
+  Serial.println("📨 Auth Response Code: " + String(httpResponseCode));
+  Serial.println("📨 Auth Response Body: " + response);
+  
   if (httpResponseCode == 200) {
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);
     DeserializationError error = deserializeJson(doc, response);
     
-    if (!error && doc.containsKey("token")) {
-      jwtToken = doc["token"].as<String>();
-      isAuthenticated = true;
-      failedBackendAttempts = 0;
-      lastSuccessfulCommunication = millis();
-      Serial.println("✓ Authentication successful");
-      return true;
+    if (error) {
+      Serial.println("❌ JSON Parse Error: " + String(error.c_str()));
+      failedBackendAttempts++;
+      return false;
     }
+    
+    // Try both "token" and "accessToken" keys
+    if (doc.containsKey("token")) {
+      jwtToken = doc["token"].as<String>();
+    } else if (doc.containsKey("accessToken")) {
+      jwtToken = doc["accessToken"].as<String>();
+    } else {
+      Serial.println("❌ No token found in response");
+      Serial.println("Available keys:");
+      JsonObject obj = doc.as<JsonObject>();
+      for (JsonPair kv : obj) {
+        Serial.println("  - " + String(kv.key().c_str()));
+      }
+      failedBackendAttempts++;
+      return false;
+    }
+    
+    isAuthenticated = true;
+    failedBackendAttempts = 0;
+    lastSuccessfulCommunication = millis();
+    Serial.println("✅ Authentication successful!");
+    Serial.println("🔑 Token: " + jwtToken.substring(0, 20) + "...");
+    return true;
   }
   
-  Serial.println("✗ Authentication failed: " + String(httpResponseCode));
+  Serial.println("❌ Authentication failed with code: " + String(httpResponseCode));
   failedBackendAttempts++;
   return false;
 }
-
 // Enhanced data sending with memory management
 bool sendDataToBackend() {
   if (!isAuthenticated && !authenticateBackend()) {
@@ -284,7 +309,24 @@ bool initializeSPIFFS() {
     Serial.println("SPIFFS mount failed");
     return false;
   }
+  Serial.println("✓ SPIFFS initialized successfully");
   return true;
+}
+
+// Debug function to list SPIFFS files
+void listSPIFFSFiles() {
+  Serial.println("=== SPIFFS File List ===");
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
+  
+  while(file) {
+    Serial.print("FILE: ");
+    Serial.print(file.name());
+    Serial.print(" SIZE: ");
+    Serial.println(file.size());
+    file = root.openNextFile();
+  }
+  Serial.println("=== End of SPIFFS List ===");
 }
 
 void setup() {
@@ -303,6 +345,8 @@ void setup() {
   // Initialize SPIFFS
   if (!initializeSPIFFS()) {
     Serial.println("Failed to initialize SPIFFS");
+  } else {
+    listSPIFFSFiles(); // Debug: List all files in SPIFFS
   }
 
   // Read initial sensor values
@@ -340,13 +384,98 @@ void setup() {
     Serial.println("✗ WiFi connection failed - OFFLINE MODE");
   }
 
-  // Web server setup (same as before)
+  // Enhanced Web server setup with CSS and JS support
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     if (SPIFFS.exists("/index.html")) {
       request->send(SPIFFS, "/index.html", "text/html");
     } else {
-      String html = "<html><body><h1>Air Purifier</h1><p>System running</p></body></html>";
+      String html = "<!DOCTYPE html><html><head><title>Air Purifier</title>";
+      html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+      html += ".container{max-width:800px;margin:0 auto;background:white;padding:20px;border-radius:8px;}";
+      html += ".status{display:flex;justify-content:space-between;margin:10px 0;}";
+      html += ".value{font-weight:bold;}</style></head>";
+      html += "<body><div class='container'><h1>Air Purifier System</h1>";
+      html += "<div class='status'>System Status: <span id='status'>Loading...</span></div>";
+      html += "<div class='status'>Input Air Quality: <span id='input'>--</span> PPM</div>";
+      html += "<div class='status'>Output Air Quality: <span id='output'>--</span> PPM</div>";
+      html += "<div class='status'>Efficiency: <span id='efficiency'>--</span>%</div>";
+      html += "<div class='status'>Fan Status: <span id='fan'>--</span></div>";
+      html += "</div><script>function updateData(){fetch('/data').then(r=>r.json()).then(d=>{";
+      html += "document.getElementById('status').textContent=d.system_mode;";
+      html += "document.getElementById('input').textContent=d.input_air_quality.toFixed(1);";
+      html += "document.getElementById('output').textContent=d.output_air_quality.toFixed(1);";
+      html += "document.getElementById('efficiency').textContent=d.efficiency.toFixed(1);";
+      html += "document.getElementById('fan').textContent=d.fan?'ON':'OFF';";
+      html += "}).catch(e=>console.error('Error:',e));}setInterval(updateData,5000);updateData();</script></body></html>";
       request->send(200, "text/html", html);
+    }
+  });
+
+  // Add route for CSS file
+  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (SPIFFS.exists("/style.css")) {
+      request->send(SPIFFS, "/style.css", "text/css");
+    } else {
+      // Fallback CSS if file doesn't exist
+      String css = "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
+      css += "h1 { color: #333; }";
+      css += ".container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }";
+      css += ".status { display: flex; justify-content: space-between; margin: 10px 0; }";
+      css += ".value { font-weight: bold; }";
+      request->send(200, "text/css", css);
+    }
+  });
+
+  // Add route for JavaScript file
+  server.on("/script.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (SPIFFS.exists("/script.js")) {
+      request->send(SPIFFS, "/script.js", "application/javascript");
+    } else {
+      // Fallback JavaScript if file doesn't exist
+      String js = "function updateData() {";
+      js += "  fetch('/data')";
+      js += "    .then(response => response.json())";
+      js += "    .then(data => {";
+      js += "      console.log('Data received:', data);";
+      js += "      document.getElementById('status').textContent = data.system_mode;";
+      js += "      document.getElementById('input').textContent = data.input_air_quality.toFixed(1);";
+      js += "      document.getElementById('output').textContent = data.output_air_quality.toFixed(1);";
+      js += "      document.getElementById('efficiency').textContent = data.efficiency.toFixed(1);";
+      js += "      document.getElementById('fan').textContent = data.fan ? 'ON' : 'OFF';";
+      js += "    })";
+      js += "    .catch(error => console.error('Error:', error));";
+      js += "}";
+      js += "setInterval(updateData, 5000);"; // Update every 5 seconds
+      js += "updateData();"; // Initial call
+      request->send(200, "application/javascript", js);
+    }
+  });
+
+  // Generic static file handler for other assets
+  server.onNotFound([](AsyncWebServerRequest *request){
+    String path = request->url();
+    
+    // Check if it's a static file request
+    if (path.endsWith(".css") || path.endsWith(".js") || path.endsWith(".ico") || 
+        path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".gif")) {
+      
+      if (SPIFFS.exists(path)) {
+        String contentType = "text/plain";
+        
+        if (path.endsWith(".css")) contentType = "text/css";
+        else if (path.endsWith(".js")) contentType = "application/javascript";
+        else if (path.endsWith(".ico")) contentType = "image/x-icon";
+        else if (path.endsWith(".png")) contentType = "image/png";
+        else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) contentType = "image/jpeg";
+        else if (path.endsWith(".gif")) contentType = "image/gif";
+        
+        request->send(SPIFFS, path, contentType);
+      } else {
+        request->send(404, "text/plain", "File not found: " + path);
+      }
+    } else {
+      request->send(404, "text/plain", "Page not found: " + path);
     }
   });
 
@@ -365,8 +494,36 @@ void setup() {
     request->send(200, "application/json", json);
   });
 
+  // Add control endpoints
+  server.on("/control/fan", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("state", true)) {
+      String state = request->getParam("state", true)->value();
+      fanState = (state == "on" || state == "1" || state == "true");
+      digitalWrite(RELAY_PIN, fanState ? HIGH : LOW);
+      request->send(200, "application/json", "{\"status\":\"success\",\"fan_state\":" + String(fanState) + "}");
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing state parameter\"}");
+    }
+  });
+
+  server.on("/control/auto", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("mode", true)) {
+      autoMode = request->getParam("mode", true)->value();
+      autoMode.toUpperCase();
+      if (autoMode != "ON" && autoMode != "OFF") autoMode = "ON";
+      request->send(200, "application/json", "{\"status\":\"success\",\"auto_mode\":\"" + autoMode + "\"}");
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing mode parameter\"}");
+    }
+  });
+
+  // Add CORS headers for better compatibility
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type");
+
   server.begin();
-  Serial.println("✓ Web server started");
+  Serial.println("✓ Web server started with static file support");
   checkMemory(); // Initial memory check
 }
 

@@ -81,6 +81,29 @@ body {
     gap: 1.5rem;
 }
 
+/* NEW: Admin Navigation Item */
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    color: var(--text-primary);
+    text-decoration: none;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    font-weight: 600;
+    margin-right: 0.5rem;
+}
+
+.nav-item:hover {
+    background: rgba(41, 128, 185, 0.1);
+    color: var(--accent);
+}
+
+.nav-item i {
+    font-size: 1rem;
+}
+
 .nav-welcome {
     font-weight: 600;
     color: var(--text-secondary);
@@ -155,6 +178,23 @@ body {
         padding: 1rem;
         flex-direction: column;
         gap: 1rem;
+    }
+    
+    .nav-menu {
+        flex-direction: column;
+        gap: 0.5rem;
+        width: 100%;
+    }
+    
+    .nav-item {
+        width: 100%;
+        justify-content: center;
+        margin-right: 0;
+    }
+    
+    .nav-welcome {
+        text-align: center;
+        margin: 0.5rem 0;
     }
     
     .card {

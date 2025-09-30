@@ -27,6 +27,9 @@ async function initializeDevicesPage() {
         // Initialize modal listeners
         initializeModalListeners();
         
+        // ADD THIS: Initialize mobile menu
+        initializeMobileMenu();
+        
     } catch (error) {
         Logger.error('Failed to initialize devices page', error);
         handleUnauthenticatedState();
@@ -291,6 +294,7 @@ async function loadUserDevices() {
     }
 }
 
+
 function showWelcomeMessage() {
     Logger.log('Showing welcome message');
 
@@ -457,6 +461,92 @@ if (shareBtn && device.can_edit !== false) {
     });
 }
 
+
+// Mobile menu functionality
+function initializeMobileMenu() {
+    const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+    const mobileMenuClose = document.getElementById('mobile-menu-close');
+    const mobileMenuOverlay = document.getElementById('mobile-menu-overlay');
+    const mobileMenuSidebar = document.getElementById('mobile-menu-sidebar');
+    const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+
+    // Toggle mobile menu
+    if (mobileMenuToggle) {
+        mobileMenuToggle.addEventListener('click', function() {
+            mobileMenuSidebar.classList.add('active');
+            mobileMenuOverlay.classList.add('active');
+            document.body.classList.add('mobile-menu-open');
+        });
+    }
+
+    // Close mobile menu
+    function closeMobileMenu() {
+        mobileMenuSidebar.classList.remove('active');
+        mobileMenuOverlay.classList.remove('active');
+        document.body.classList.remove('mobile-menu-open');
+    }
+
+    if (mobileMenuClose) {
+        mobileMenuClose.addEventListener('click', closeMobileMenu);
+    }
+
+    if (mobileMenuOverlay) {
+        mobileMenuOverlay.addEventListener('click', closeMobileMenu);
+    }
+
+    // Mobile logout functionality
+    if (mobileLogoutBtn) {
+        mobileLogoutBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            closeMobileMenu();
+            logoutUser();
+        });
+    }
+
+    // Close menu when clicking on nav items (except logout)
+    const mobileNavItems = document.querySelectorAll('.mobile-nav-item:not(.mobile-nav-logout)');
+    mobileNavItems.forEach(item => {
+        item.addEventListener('click', closeMobileMenu);
+    });
+
+    // Close menu on escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && mobileMenuSidebar.classList.contains('active')) {
+            closeMobileMenu();
+        }
+    });
+
+    // Sync username between desktop and mobile
+    syncUsernameDisplay();
+}
+
+// Sync username between desktop and mobile displays
+function syncUsernameDisplay() {
+    const desktopUsername = document.getElementById('username-display');
+    const mobileUsername = document.getElementById('mobile-username-display');
+    
+    if (desktopUsername && mobileUsername) {
+        // Initial sync
+        mobileUsername.textContent = desktopUsername.textContent;
+        
+        // Observe changes to desktop username
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                if (mutation.type === 'characterData' || mutation.type === 'childList') {
+                    mobileUsername.textContent = desktopUsername.textContent;
+                }
+            });
+        });
+        
+        observer.observe(desktopUsername, {
+            characterData: true,
+            childList: true,
+            subtree: true
+        });
+    }
+}
+
+
 async function addNewDevice(e) {
     e.preventDefault();
 
@@ -560,27 +650,42 @@ function closeShareModal() {
 // Initialize Modal Event Listeners
 function initializeModalListeners() {
     // Share modal events
-    document.getElementById('share-modal-close').addEventListener('click', closeShareModal);
-    document.getElementById('share-modal-cancel').addEventListener('click', closeShareModal);
-    document.getElementById('share-device-confirm').addEventListener('click', confirmShareDevice);
+    const shareModalClose = document.getElementById('share-modal-close');
+    const shareModalCancel = document.getElementById('share-modal-cancel');
+    const shareDeviceConfirm = document.getElementById('share-device-confirm');
+    
+    if (shareModalClose) shareModalClose.addEventListener('click', closeShareModal);
+    if (shareModalCancel) shareModalCancel.addEventListener('click', closeShareModal);
+    if (shareDeviceConfirm) shareDeviceConfirm.addEventListener('click', confirmShareDevice);
     
     // Delete modal events
-    document.getElementById('delete-modal-close').addEventListener('click', closeDeleteModal);
-    document.getElementById('delete-modal-cancel').addEventListener('click', closeDeleteModal);
-    document.getElementById('delete-device-confirm').addEventListener('click', confirmDeleteDevice);
+    const deleteModalClose = document.getElementById('delete-modal-close');
+    const deleteModalCancel = document.getElementById('delete-modal-cancel');
+    const deleteDeviceConfirm = document.getElementById('delete-device-confirm');
+    
+    if (deleteModalClose) deleteModalClose.addEventListener('click', closeDeleteModal);
+    if (deleteModalCancel) deleteModalCancel.addEventListener('click', closeDeleteModal);
+    if (deleteDeviceConfirm) deleteDeviceConfirm.addEventListener('click', confirmDeleteDevice);
     
     // Close modals when clicking outside
-    document.getElementById('share-device-modal').addEventListener('click', function(e) {
-        if (e.target === this) {
-            closeShareModal();
-        }
-    });
+    const shareModal = document.getElementById('share-device-modal');
+    const deleteModal = document.getElementById('delete-device-modal');
     
-    document.getElementById('delete-device-modal').addEventListener('click', function(e) {
-        if (e.target === this) {
-            closeDeleteModal();
-        }
-    });
+    if (shareModal) {
+        shareModal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeShareModal();
+            }
+        });
+    }
+    
+    if (deleteModal) {
+        deleteModal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeDeleteModal();
+            }
+        });
+    }
     
     // Close modals with Escape key
     document.addEventListener('keydown', function(e) {
@@ -591,60 +696,86 @@ function initializeModalListeners() {
     });
 }
 
+// Modal error handling functions
+function showModalError(modalId, message) {
+    Logger.log('Showing modal error', { modalId, message });
+    
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    
+    // Remove existing error
+    const existingError = modal.querySelector('.modal-error');
+    if (existingError) existingError.remove();
+    
+    // Create and insert error message
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'modal-error';
+    errorDiv.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${message}`;
+    
+    const modalContent = modal.querySelector('.modal-content');
+    if (modalContent) {
+        modalContent.insertBefore(errorDiv, modalContent.firstChild);
+    }
+}
+
+function clearModalError(modalId) {
+    Logger.log('Clearing modal error', { modalId });
+    
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    
+    const existingError = modal.querySelector('.modal-error');
+    if (existingError) {
+        existingError.remove();
+    }
+}
+
 // Share Device Function
 async function confirmShareDevice() {
     const usernameInput = document.getElementById('share-username');
     const sharedUsername = usernameInput.value.trim();
     
+    // Clear any existing modal errors
+    clearModalError('share-device-modal');
+    
     if (!sharedUsername) {
-        showFormError('Please enter a username');
+        showModalError('share-device-modal', 'Please enter a username');
         return;
     }
     
     if (!currentSharingDevice) {
-        showFormError('No device selected for sharing');
+        showModalError('share-device-modal', 'No device selected for sharing');
         return;
     }
     
+    // Store device info before closing modal
+    const deviceId = currentSharingDevice.deviceId;
+    const deviceName = currentSharingDevice.deviceName;
+    
     try {
         Logger.log('Sharing device', { 
-            deviceId: currentSharingDevice.deviceId, 
-            deviceName: currentSharingDevice.deviceName,
+            deviceId: deviceId, 
+            deviceName: deviceName,
             sharedUsername 
         });
         
         await apiFetch('/api/devices/share', {
             method: 'POST',
             body: JSON.stringify({
-                device_id: currentSharingDevice.deviceId,
+                device_id: deviceId,
                 shared_username: sharedUsername
             })
         });
         
         Logger.info('Device shared successfully');
         closeShareModal();
-        showFormSuccess(`Device "${currentSharingDevice.deviceName}" shared with ${sharedUsername} successfully!`);
+        showFormSuccess(`Device "${deviceName}" shared with ${sharedUsername} successfully!`);
         
     } catch (error) {
         Logger.error('Device sharing failed', error);
-        showFormError(error.message);
+        showModalError('share-device-modal', error.message);
     }
 }
-
-// Update the share button event listener in displayDevices function:
-const shareBtn = deviceCard.querySelector('.share-device');
-if (shareBtn && device.can_edit !== false) {
-    shareBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        Logger.log('Share device clicked', { 
-            deviceId: device.device_id, 
-            deviceName: device.name 
-        });
-        openShareModal(device.device_id, device.name);
-    });
-}
-
-
 
 function addDeviceToLocalStorage(deviceId, deviceName, deviceLocation, deviceUsername, devicePassword) {
     Logger.log('Adding device to localStorage', { deviceName, deviceId });
@@ -832,25 +963,6 @@ function closeDeleteModal() {
     const modal = document.getElementById('delete-device-modal');
     modal.classList.remove('open');
     currentDeletionDevice = null;
-}
-
-// Initialize Delete Modal Event Listeners
-function initializeDeleteModalListeners() {
-    // Close modal events
-    document.getElementById('delete-modal-close').addEventListener('click', closeDeleteModal);
-    document.getElementById('delete-modal-cancel').addEventListener('click', closeDeleteModal);
-    
-    // Confirm delete event
-    document.getElementById('delete-device-confirm').addEventListener('click', confirmDeleteDevice);
-    
-    // Close modal when clicking outside
-    document.getElementById('delete-device-modal').addEventListener('click', function(e) {
-        if (e.target === this) {
-            closeDeleteModal();
-        }
-    });
-    
-    // Close modal with Escape key (already handled by initializeModalListeners)
 }
 
 // Confirm Delete Device Function

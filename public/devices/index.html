@@ -9,11 +9,43 @@
   <link rel="stylesheet" href="../assets/css/devices.css">
 </head>
 <body>
+  <!-- Mobile Menu Overlay -->
+  <div class="mobile-menu-overlay" id="mobile-menu-overlay"></div>
+
+  <!-- Mobile Menu Sidebar -->
+  <div class="mobile-menu-sidebar" id="mobile-menu-sidebar">
+    <div class="mobile-menu-header">
+      <h3><i class="fas fa-wind"></i> Air Purifier Control</h3>
+      <button class="mobile-menu-close" id="mobile-menu-close">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="mobile-menu-items">
+      <a href="/admin" class="mobile-nav-item">
+        <i class="fas fa-cog"></i> Admin
+      </a>
+      <div class="mobile-nav-welcome">Welcome, <span id="mobile-username-display">User</span></div>
+      <a href="devices/" class="mobile-nav-item">
+        <i class="fas fa-list"></i> My Devices
+      </a>
+      <a href="#" class="mobile-nav-item mobile-nav-logout" id="mobile-logout-btn">
+        <i class="fas fa-sign-out-alt"></i> Logout
+      </a>
+    </div>
+  </div>
+
+  <!-- Navigation -->
   <nav class="navbar">
     <div class="nav-brand">
       <h1><i class="fas fa-wind"></i> Air Purifier Control</h1>
+      <button class="mobile-menu-toggle" id="mobile-menu-toggle">
+        <i class="fas fa-bars"></i>
+      </button>
     </div>
     <div class="nav-menu">
+      <a href="/admin" class="nav-item" id="admin-nav">
+        <i class="fas fa-cog"></i> Admin
+      </a>
       <div class="nav-welcome">Welcome, <span id="username-display">User</span></div>
       <a href="#" class="btn btn-danger" id="logout-btn">
         <i class="fas fa-sign-out-alt"></i> Logout
@@ -21,6 +53,7 @@
     </div>
   </nav>
 
+  <!-- Rest of your HTML remains the same -->
   <div class="container">
     <div class="card">
       <h2><i class="fas fa-list"></i> Your Air Purifier Devices</h2>
@@ -81,7 +114,7 @@
   </div>
 
   <!-- Share Device Modal -->
-<div id="share-device-modal" class="modal">
+  <div id="share-device-modal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
             <h3><i class="fas fa-share-alt"></i> Share Device</h3>
@@ -108,9 +141,10 @@
             </button>
         </div>
     </div>
-</div>
-<!-- Delete Device Confirmation Modal -->
-<div id="delete-device-modal" class="modal">
+  </div>
+  
+  <!-- Delete Device Confirmation Modal -->
+  <div id="delete-device-modal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
             <h3><i class="fas fa-exclamation-triangle"></i> Delete Device</h3>
@@ -139,7 +173,7 @@
             </button>
         </div>
     </div>
-</div>
+  </div>
 
   <script src="../assets/js/devices.js"></script>
 </body>

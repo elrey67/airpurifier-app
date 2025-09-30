@@ -1,70 +1,218 @@
+// Environment-based logger
+const Logger = {
+    getEnvironment: function() {
+        const hostname = window.location.hostname;
+        return hostname.includes('.com') ? 'production' : 'development';
+    },
+    
+    isDebugEnabled: function() {
+        return this.getEnvironment() === 'development';
+    },
+    
+    log: function(message, data = null) {
+        if (this.isDebugEnabled()) {
+            console.log(`%c[ADMIN] ${message}`, 'color: blue; font-weight: bold;', data || '');
+        }
+    },
+    
+    info: function(message, data = null) {
+        console.info(`%c[ADMIN] ${message}`, 'color: teal; font-weight: bold;', data || '');
+    },
+    
+    warn: function(message, data = null) {
+        console.warn(`%c[ADMIN] ${message}`, 'color: darkorange; font-weight: bold;', data || '');
+    },
+    
+    error: function(message, error = null) {
+        console.error(`%c[ADMIN] ${message}`, 'color: crimson; font-weight: bold;', error || '');
+    },
+    
+    sanitizeData: function(data) {
+        if (!data) return data;
+        
+        const sanitized = { ...data };
+        const sensitiveFields = ['password', 'token', 'authToken', 'authorization', 'secret', 'key'];
+        
+        sensitiveFields.forEach(field => {
+            if (sanitized[field]) {
+                sanitized[field] = '***REDACTED***';
+            }
+        });
+        
+        return sanitized;
+    }
+};
+
 class AdminApp {
     constructor() {
-        this.authToken = localStorage.getItem('authToken');
+        // Token storage in memory instead of localStorage :cite[2]:cite[5]:cite[9]
+        this.authToken = this.retrieveTokenFromStorage();
+        this.refreshToken = localStorage.getItem('refreshToken'); // Keep refresh token for persistence
         this.currentUser = null;
         this.users = [];
+        this.tokenRefreshTimeout = null;
+        
+        Logger.log('AdminApp initialized', {
+            hasAuthToken: !!this.authToken,
+            hasRefreshToken: !!this.refreshToken,
+            environment: Logger.getEnvironment()
+        });
         
         this.init();
     }
     
-    init() {
-        // Check authentication on page load
-        if (this.authToken) {
-            this.verifyToken();
-        } else {
-            this.showLoginPage();
+    /**
+     * Secure token retrieval - prefers memory, falls back to localStorage during transition
+     */
+    retrieveTokenFromStorage() {
+        // First check sessionStorage (in-memory equivalent)
+        let token = sessionStorage.getItem('authToken');
+        
+        // Fallback to localStorage during transition period
+        if (!token) {
+            token = localStorage.getItem('authToken');
+            if (token) {
+                Logger.log('Migrating token from localStorage to sessionStorage');
+                sessionStorage.setItem('authToken', token);
+                // Keep localStorage for now, remove after confirming new system works
+            }
         }
         
-        // Set up event listeners
-        document.getElementById('login-form').addEventListener('submit', (e) => this.handleLogin(e));
-        document.getElementById('logout-btn').addEventListener('click', () => this.logout());
-        document.getElementById('add-user-form').addEventListener('submit', (e) => this.handleAddUser(e));
-        document.getElementById('edit-user-form').addEventListener('submit', (e) => this.handleEditUser(e));
-        document.getElementById('cancel-edit').addEventListener('click', () => this.hideEditModal());
-        document.querySelector('.close-btn').addEventListener('click', () => this.hideEditModal());
-        
-        // Close modal when clicking outside
-        document.getElementById('edit-user-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'edit-user-modal') {
-                this.hideEditModal();
-            }
+        Logger.log('Token retrieval', {
+            source: token ? (sessionStorage.getItem('authToken') === token ? 'sessionStorage' : 'localStorage') : 'none',
+            tokenLength: token ? token.length : 0
         });
         
-        // Event delegation for dynamically created buttons
-        document.getElementById('users-table-body').addEventListener('click', (e) => {
-            const target = e.target;
-            if (target.classList.contains('btn-edit')) {
-                const userId = parseInt(target.getAttribute('data-user-id'));
-                this.editUser(userId);
-            } else if (target.classList.contains('btn-delete')) {
-                const userId = parseInt(target.getAttribute('data-user-id'));
-                this.deleteUser(userId);
-            }
+        return token;
+    }
+    
+    /**
+     * Secure token storage - uses sessionStorage (in-memory behavior) :cite[9]
+     */
+    storeToken(token, refreshToken = null) {
+        // Store in sessionStorage for in-memory like behavior :cite[9]
+        sessionStorage.setItem('authToken', token);
+        this.authToken = token;
+        
+        // Store refresh token in localStorage for persistence across tabs :cite[5]
+        if (refreshToken) {
+            localStorage.setItem('refreshToken', refreshToken);
+            this.refreshToken = refreshToken;
+        }
+        
+        Logger.log('Tokens stored securely', {
+            authTokenStored: true,
+            refreshTokenStored: !!refreshToken
         });
     }
     
+    /**
+     * Secure token cleanup
+     */
+    clearTokens() {
+        sessionStorage.removeItem('authToken');
+        localStorage.removeItem('refreshToken');
+        localStorage.removeItem('authToken'); // Clean up old storage
+        
+        this.authToken = null;
+        this.refreshToken = null;
+        
+        if (this.tokenRefreshTimeout) {
+            clearTimeout(this.tokenRefreshTimeout);
+            this.tokenRefreshTimeout = null;
+        }
+        
+        Logger.log('All tokens cleared from storage');
+    }
+    
+    init() {
+        Logger.log('Initializing AdminApp');
+        
+        // Check authentication on page load
+        if (this.authToken) {
+            Logger.log('Existing token found, verifying...');
+            this.verifyToken();
+        } else {
+            Logger.warn('No authentication token found');
+            this.showLoginPage();
+        }
+        
+        this.setupEventListeners();
+    }
+    
+    setupEventListeners() {
+        try {
+            document.getElementById('login-form').addEventListener('submit', (e) => this.handleLogin(e));
+            document.getElementById('logout-btn').addEventListener('click', () => this.logout());
+            document.getElementById('add-user-form').addEventListener('submit', (e) => this.handleAddUser(e));
+            document.getElementById('edit-user-form').addEventListener('submit', (e) => this.handleEditUser(e));
+            document.getElementById('cancel-edit').addEventListener('click', () => this.hideEditModal());
+            document.querySelector('.close-btn').addEventListener('click', () => this.hideEditModal());
+            
+            // Close modal when clicking outside
+            const editModal = document.getElementById('edit-user-modal');
+            if (editModal) {
+                editModal.addEventListener('click', (e) => {
+                    if (e.target.id === 'edit-user-modal') {
+                        this.hideEditModal();
+                    }
+                });
+            }
+            
+            // Event delegation for dynamically created buttons
+            const usersTable = document.getElementById('users-table-body');
+            if (usersTable) {
+                usersTable.addEventListener('click', (e) => {
+                    const target = e.target;
+                    if (target.classList.contains('btn-edit')) {
+                        const userId = parseInt(target.getAttribute('data-user-id'));
+                        this.editUser(userId);
+                    } else if (target.classList.contains('btn-delete')) {
+                        const userId = parseInt(target.getAttribute('data-user-id'));
+                        this.deleteUser(userId);
+                    }
+                });
+            }
+            
+            Logger.log('All event listeners setup successfully');
+        } catch (error) {
+            Logger.error('Error setting up event listeners', error);
+        }
+    }
+    
     showLoginPage() {
+        Logger.log('Showing login page');
         document.getElementById('login-container').classList.remove('hidden');
         document.getElementById('admin-container').classList.add('hidden');
     }
     
     showAdminPage() {
+        Logger.log('Showing admin page', { user: this.currentUser?.username });
         document.getElementById('login-container').classList.add('hidden');
         document.getElementById('admin-container').classList.remove('hidden');
     }
     
     showEditModal() {
+        Logger.log('Showing edit user modal');
         document.getElementById('edit-user-modal').classList.remove('hidden');
     }
     
     hideEditModal() {
+        Logger.log('Hiding edit user modal');
         document.getElementById('edit-user-modal').classList.add('hidden');
     }
     
     showMessage(message, type = 'error') {
         const messageEl = document.getElementById('login-message');
+        if (!messageEl) {
+            Logger.warn('Message element not found');
+            return;
+        }
+        
         messageEl.textContent = message;
         messageEl.className = `message ${type}`;
+        
+        Logger.log(`Showing ${type} message`, { message });
         
         // Auto-hide success messages
         if (type === 'success') {
@@ -81,6 +229,8 @@ class AdminApp {
         const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
         
+        Logger.log('Login attempt', { username, hasPassword: !!password });
+        
         try {
             const response = await fetch('/api/auth/login', {
                 method: 'POST',
@@ -91,22 +241,43 @@ class AdminApp {
             });
             
             if (!response.ok) {
-                throw new Error('Login failed');
+                const errorText = await response.text();
+                throw new Error(errorText || 'Login failed');
             }
             
             const data = await response.json();
-            this.authToken = data.token;
-            localStorage.setItem('authToken', this.authToken);
+            Logger.log('Login successful', { 
+                user: data.username, 
+                isAdmin: data.is_admin,
+                tokensReceived: {
+                    accessToken: !!data.accessToken || !!data.token,
+                    refreshToken: !!data.refreshToken
+                }
+            });
+            
+            // Store tokens using secure method
+            this.storeToken(data.accessToken || data.token, data.refreshToken);
+            
+            // Setup token refresh before verification
+            this.scheduleTokenRefresh();
+            
             this.verifyToken();
             
         } catch (error) {
+            Logger.error('Login failed', error);
             this.showMessage('Login failed. Please check your credentials.');
-            console.error('Login error:', error);
         }
     }
     
     async verifyToken() {
+        if (!this.authToken) {
+            Logger.warn('No token available for verification');
+            this.showLoginPage();
+            return;
+        }
+        
         try {
+            Logger.log('Verifying token');
             const response = await fetch('/api/auth/verify', {
                 headers: {
                     'Authorization': `Bearer ${this.authToken}`
@@ -114,14 +285,24 @@ class AdminApp {
             });
             
             if (!response.ok) {
-                throw new Error('Token verification failed');
+                throw new Error(`HTTP ${response.status}: Token verification failed`);
             }
             
             const data = await response.json();
+            
+            if (!data.valid) {
+                throw new Error('Token invalid according to server');
+            }
+            
             this.currentUser = data.user;
+            Logger.info('Token verification successful', { 
+                user: this.currentUser.username,
+                isAdmin: this.currentUser.is_admin 
+            });
             
             // Check if user is admin
             if (!this.currentUser.is_admin) {
+                Logger.warn('Non-admin user attempted admin access', { user: this.currentUser.username });
                 this.showMessage('Admin access required');
                 this.logout();
                 return;
@@ -132,23 +313,105 @@ class AdminApp {
             this.loadUsers();
             
         } catch (error) {
-            this.showMessage('Session expired. Please login again.');
-            this.logout();
-            console.error('Token verification error:', error);
+            Logger.error('Token verification failed', error);
+            
+            // Attempt token refresh if verification fails
+            if (await this.attemptTokenRefresh()) {
+                Logger.log('Token refresh successful, retrying verification');
+                this.verifyToken();
+            } else {
+                this.showMessage('Session expired. Please login again.');
+                this.logout();
+            }
         }
     }
-
     
+    /**
+     * Attempt to refresh the access token using refresh token :cite[5]
+     */
+    async attemptTokenRefresh() {
+        if (!this.refreshToken) {
+            Logger.warn('No refresh token available');
+            return false;
+        }
+        
+        try {
+            Logger.log('Attempting token refresh');
+            const response = await fetch('/api/auth/refresh-token', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ refreshToken: this.refreshToken })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Refresh failed: HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.success && data.accessToken) {
+                this.storeToken(data.accessToken, data.refreshToken || this.refreshToken);
+                Logger.info('Token refresh successful');
+                return true;
+            }
+        } catch (error) {
+            Logger.error('Token refresh failed', error);
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Schedule automatic token refresh :cite[5]
+     */
+    scheduleTokenRefresh() {
+        // Clear existing timeout
+        if (this.tokenRefreshTimeout) {
+            clearTimeout(this.tokenRefreshTimeout);
+        }
+        
+        // Refresh token 5 minutes before expiry (assuming 1 hour expiry)
+        const refreshTime = 55 * 60 * 1000; // 55 minutes
+        
+        this.tokenRefreshTimeout = setTimeout(async () => {
+            Logger.log('Performing scheduled token refresh');
+            if (await this.attemptTokenRefresh()) {
+                this.scheduleTokenRefresh(); // Reschedule next refresh
+            } else {
+                Logger.warn('Scheduled token refresh failed');
+            }
+        }, refreshTime);
+        
+        Logger.log('Token refresh scheduled', { refreshInMinutes: 55 });
+    }
     
     logout() {
-        localStorage.removeItem('authToken');
-        this.authToken = null;
+        Logger.info('User logging out', { user: this.currentUser?.username });
+        
+        // Call logout endpoint to invalidate refresh token if available
+        if (this.refreshToken) {
+            fetch('/api/auth/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.authToken}`
+                },
+                body: JSON.stringify({ refreshToken: this.refreshToken })
+            }).catch(err => {
+                Logger.error('Logout API call failed', err);
+            });
+        }
+        
+        this.clearTokens();
         this.currentUser = null;
         this.showLoginPage();
     }
     
     async loadUsers() {
         try {
+            Logger.log('Loading users list');
             const response = await fetch('/api/users', {
                 headers: {
                     'Authorization': `Bearer ${this.authToken}`
@@ -156,21 +419,27 @@ class AdminApp {
             });
             
             if (!response.ok) {
-                throw new Error('Failed to load users');
+                throw new Error(`HTTP ${response.status}: Failed to load users`);
             }
             
             const data = await response.json();
             this.users = data.users;
+            Logger.info('Users loaded successfully', { count: this.users.length });
             this.renderUsersTable();
             
         } catch (error) {
+            Logger.error('Error loading users', error);
             this.showMessage('Failed to load users');
-            console.error('Error loading users:', error);
         }
     }
     
     renderUsersTable() {
         const tableBody = document.getElementById('users-table-body');
+        if (!tableBody) {
+            Logger.error('Users table body not found');
+            return;
+        }
+        
         tableBody.innerHTML = '';
         
         this.users.forEach(user => {
@@ -183,7 +452,7 @@ class AdminApp {
                 <td>
                     <button class="btn btn-secondary btn-edit" data-user-id="${user.id}">Edit</button>
                     <button class="btn btn-danger btn-delete" data-user-id="${user.id}" 
-                        ${user.id === this.currentUser.id ? 'disabled' : ''}>
+                        ${user.id === this.currentUser?.id ? 'disabled' : ''}>
                         Delete
                     </button>
                 </td>
@@ -191,6 +460,8 @@ class AdminApp {
             
             tableBody.appendChild(row);
         });
+        
+        Logger.log('Users table rendered', { userCount: this.users.length });
     }
     
     async handleAddUser(e) {
@@ -199,6 +470,12 @@ class AdminApp {
         const username = document.getElementById('new-username').value;
         const password = document.getElementById('new-password').value;
         const isAdmin = document.getElementById('new-is-admin').checked;
+        
+        Logger.log('Adding new user', { 
+            username, 
+            isAdmin,
+            hasPassword: !!password 
+        });
         
         try {
             const response = await fetch('/api/users', {
@@ -212,7 +489,7 @@ class AdminApp {
             
             if (!response.ok) {
                 const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to create user');
+                throw new Error(errorData.error || `HTTP ${response.status}: Failed to create user`);
             }
             
             // Clear form
@@ -221,18 +498,24 @@ class AdminApp {
             // Reload users
             this.loadUsers();
             
+            Logger.info('User created successfully', { username });
             this.showMessage('User created successfully', 'success');
             
         } catch (error) {
+            Logger.error('Error creating user', error);
             this.showMessage(error.message);
-            console.error('Error creating user:', error);
         }
     }
     
     editUser(userId) {
         const user = this.users.find(u => u.id === userId);
         
-        if (!user) return;
+        if (!user) {
+            Logger.warn('User not found for editing', { userId });
+            return;
+        }
+        
+        Logger.log('Editing user', { userId, username: user.username });
         
         document.getElementById('edit-user-id').value = user.id;
         document.getElementById('edit-username').value = user.username;
@@ -250,6 +533,13 @@ class AdminApp {
         const password = document.getElementById('edit-password').value;
         const isAdmin = document.getElementById('edit-is-admin').checked;
         
+        Logger.log('Updating user', { 
+            userId, 
+            username, 
+            isAdmin,
+            passwordChanged: !!password 
+        });
+        
         const updateData = { username, is_admin: isAdmin };
         if (password) updateData.password = password;
         
@@ -265,24 +555,40 @@ class AdminApp {
             
             if (!response.ok) {
                 const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to update user');
+                throw new Error(errorData.error || `HTTP ${response.status}: Failed to update user`);
             }
             
             this.hideEditModal();
             this.loadUsers();
             
+            Logger.info('User updated successfully', { userId, username });
             this.showMessage('User updated successfully', 'success');
             
         } catch (error) {
+            Logger.error('Error updating user', error);
             this.showMessage(error.message);
-            console.error('Error updating user:', error);
         }
     }
     
     async deleteUser(userId) {
-        if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+        const user = this.users.find(u => u.id === userId);
+        if (!user) {
+            Logger.warn('User not found for deletion', { userId });
             return;
         }
+        
+        if (user.id === this.currentUser?.id) {
+            Logger.warn('User attempted to delete themselves', { userId });
+            this.showMessage('You cannot delete your own account');
+            return;
+        }
+        
+        if (!confirm(`Are you sure you want to delete user "${user.username}"? This action cannot be undone.`)) {
+            Logger.log('User deletion cancelled by user');
+            return;
+        }
+        
+        Logger.log('Deleting user', { userId, username: user.username });
         
         try {
             const response = await fetch(`/api/users/${userId}`, {
@@ -294,22 +600,247 @@ class AdminApp {
             
             if (!response.ok) {
                 const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to delete user');
+                throw new Error(errorData.error || `HTTP ${response.status}: Failed to delete user`);
             }
             
             this.loadUsers();
             
+            Logger.info('User deleted successfully', { userId, username: user.username });
             this.showMessage('User deleted successfully', 'success');
             
         } catch (error) {
+            Logger.error('Error deleting user', error);
             this.showMessage(error.message);
-            console.error('Error deleting user:', error);
         }
     }
+    // Add these methods to the AdminApp class
+
+/**
+ * Initialize mobile menu functionality
+ */
+initializeMobileMenu() {
+    const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+    const mobileMenuClose = document.getElementById('mobile-menu-close');
+    const mobileMenuOverlay = document.getElementById('mobile-menu-overlay');
+    const mobileMenuSidebar = document.getElementById('mobile-menu-sidebar');
+    const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+
+    // Toggle mobile menu
+    if (mobileMenuToggle) {
+        mobileMenuToggle.addEventListener('click', () => {
+            this.openMobileMenu();
+        });
+    }
+
+    // Close mobile menu
+    if (mobileMenuClose) {
+        mobileMenuClose.addEventListener('click', () => {
+            this.closeMobileMenu();
+        });
+    }
+
+    if (mobileMenuOverlay) {
+        mobileMenuOverlay.addEventListener('click', () => {
+            this.closeMobileMenu();
+        });
+    }
+
+    // Mobile logout functionality
+    if (mobileLogoutBtn) {
+        mobileLogoutBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.closeMobileMenu();
+            this.logout();
+        });
+    }
+
+    // Close menu when clicking on nav items (except logout)
+    const mobileNavItems = document.querySelectorAll('.mobile-nav-item:not(.mobile-nav-logout)');
+    mobileNavItems.forEach(item => {
+        item.addEventListener('click', () => {
+            this.closeMobileMenu();
+        });
+    });
+
+    // Close menu on escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && mobileMenuSidebar.classList.contains('active')) {
+            this.closeMobileMenu();
+        }
+    });
+
+    Logger.log('Mobile menu initialized');
+}
+
+/**
+ * Open mobile menu
+ */
+openMobileMenu() {
+    const mobileMenuSidebar = document.getElementById('mobile-menu-sidebar');
+    const mobileMenuOverlay = document.getElementById('mobile-menu-overlay');
+    
+    mobileMenuSidebar.classList.add('active');
+    mobileMenuOverlay.classList.add('active');
+    document.body.classList.add('mobile-menu-open');
+    
+    Logger.log('Mobile menu opened');
+}
+
+/**
+ * Close mobile menu
+ */
+closeMobileMenu() {
+    const mobileMenuSidebar = document.getElementById('mobile-menu-sidebar');
+    const mobileMenuOverlay = document.getElementById('mobile-menu-overlay');
+    
+    mobileMenuSidebar.classList.remove('active');
+    mobileMenuOverlay.classList.remove('active');
+    document.body.classList.remove('mobile-menu-open');
+    
+    Logger.log('Mobile menu closed');
+}
+
+/**
+ * Sync user greeting between desktop and mobile
+ */
+syncUserGreeting() {
+    const desktopGreeting = document.getElementById('user-greeting');
+    const mobileGreeting = document.getElementById('mobile-user-greeting');
+    
+    if (desktopGreeting && mobileGreeting) {
+        // Initial sync
+        mobileGreeting.textContent = desktopGreeting.textContent.replace('Welcome, ', '');
+        
+        // Observe changes to desktop greeting
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'characterData' || mutation.type === 'childList') {
+                    mobileGreeting.textContent = desktopGreeting.textContent.replace('Welcome, ', '');
+                }
+            });
+        });
+        
+        observer.observe(desktopGreeting, {
+            characterData: true,
+            childList: true,
+            subtree: true
+        });
+    }
+}
+
+// Update the init method to include mobile menu
+init() {
+    Logger.log('Initializing AdminApp');
+    
+    // Check authentication on page load
+    if (this.authToken) {
+        Logger.log('Existing token found, verifying...');
+        this.verifyToken();
+    } else {
+        Logger.warn('No authentication token found');
+        this.showLoginPage();
+    }
+    
+    this.setupEventListeners();
+    this.initializeMobileMenu(); // Add this line
+}
+
+// Update the showAdminPage method to sync user greeting
+showAdminPage() {
+    Logger.log('Showing admin page', { user: this.currentUser?.username });
+    document.getElementById('login-container').classList.add('hidden');
+    document.getElementById('admin-container').classList.remove('hidden');
+    
+    // Sync user greeting for mobile
+    this.syncUserGreeting();
+}
+
+// Update the setupEventListeners method to include home button
+setupEventListeners() {
+    try {
+        document.getElementById('login-form').addEventListener('submit', (e) => this.handleLogin(e));
+        document.getElementById('logout-btn').addEventListener('click', () => this.logout());
+        document.getElementById('add-user-form').addEventListener('submit', (e) => this.handleAddUser(e));
+        document.getElementById('edit-user-form').addEventListener('submit', (e) => this.handleEditUser(e));
+        document.getElementById('cancel-edit').addEventListener('click', () => this.hideEditModal());
+        document.querySelector('.close-btn').addEventListener('click', () => this.hideEditModal());
+        
+        // Add home button event listener if it exists
+        const homeBtn = document.querySelector('.home-btn');
+        if (homeBtn) {
+            homeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                Logger.log('Home button clicked, redirecting to dashboard');
+                window.location.href = '/';
+            });
+        }
+        
+        // Close modal when clicking outside
+        const editModal = document.getElementById('edit-user-modal');
+        if (editModal) {
+            editModal.addEventListener('click', (e) => {
+                if (e.target.id === 'edit-user-modal') {
+                    this.hideEditModal();
+                }
+            });
+        }
+        
+        // Event delegation for dynamically created buttons
+        const usersTable = document.getElementById('users-table-body');
+        if (usersTable) {
+            usersTable.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target.classList.contains('btn-edit')) {
+                    const userId = parseInt(target.getAttribute('data-user-id'));
+                    this.editUser(userId);
+                } else if (target.classList.contains('btn-delete')) {
+                    const userId = parseInt(target.getAttribute('data-user-id'));
+                    this.deleteUser(userId);
+                }
+            });
+        }
+        
+        Logger.log('All event listeners setup successfully');
+    } catch (error) {
+        Logger.error('Error setting up event listeners', error);
+    }
+}
+
+// Update the logout method to close mobile menu
+logout() {
+    Logger.info('User logging out', { user: this.currentUser?.username });
+    
+    // Close mobile menu if open
+    this.closeMobileMenu();
+    
+    // Call logout endpoint to invalidate refresh token if available
+    if (this.refreshToken) {
+        fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.authToken}`
+            },
+            body: JSON.stringify({ refreshToken: this.refreshToken })
+        }).catch(err => {
+            Logger.error('Logout API call failed', err);
+        });
+    }
+    
+    this.clearTokens();
+    this.currentUser = null;
+    this.showLoginPage();
+}
 }
 
 // Initialize the admin app when the page loads
 let adminApp;
 document.addEventListener('DOMContentLoaded', () => {
+    Logger.log('=== ADMIN APP STARTING ===', {
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent
+    });
+    
     adminApp = new AdminApp();
 });
+
