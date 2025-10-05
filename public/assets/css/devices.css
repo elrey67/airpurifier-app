@@ -1019,3 +1019,22 @@ body.mobile-menu-open {
         transform: translateY(0);
     }
 }
+
+.shared-badge {
+    background: var(--accent);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    display: inline-block;
+    margin-bottom: 8px;
+}
+
+.shared-badge i {
+    margin-right: 4px;
+}
+
+.shared-device {
+    border-left: 4px solid var(--accent);
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+}

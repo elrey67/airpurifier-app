@@ -1,6 +1,8 @@
 const database = require('../config/database'); // FIXED IMPORT
 const { validationResult } = require('express-validator');
 const logger = require('../utils/logger');
+const asyncHandler = require('express-async-handler');
+
 
 // Get all readings with optional filtering
 exports.getReadings = (req, res) => {
@@ -121,8 +123,9 @@ exports.getStats = (req, res) => {
   }
 };
 
+
 // Store device data from ESP32 (FIXED function call)
-exports.storeDeviceData = async (req, res) => {
+exports.storeDeviceData = asyncHandler(async (req, res) => {
   try {
     const { device_id, system_mode, input_air_quality, output_air_quality, efficiency, fan_state, auto_mode } = req.body;
     const deviceId = device_id || 'esp32_air_purifier_01';
@@ -162,7 +165,7 @@ exports.storeDeviceData = async (req, res) => {
     logger.error('Error storing device data:', error);
     res.status(500).json({ error: 'Failed to store device data' });
   }
-};
+});
 
 // ESP32-specific endpoint (FIXED function call)
 exports.storeESP32Reading = async (req, res) => {

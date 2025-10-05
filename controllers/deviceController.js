@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 const OFFLINE_THRESHOLD = 30000; // 30 seconds
 const MONITORING_INTERVAL = 10000; // Check every 10 seconds
 
-// SIMPLE: Check if device is offline based on database timestamp
+// FIXED: Check if device is offline based on database timestamp
 const isDeviceOffline = async (deviceId) => {
     try {
         const status = await database.getLatestStatus(deviceId);
@@ -25,42 +25,49 @@ const isDeviceOffline = async (deviceId) => {
     }
 };
 
-// SIMPLE: Update device status in database
+// FIXED: Update device status in database with proper async/await
 const updateDeviceStatus = async (deviceId, isOnline) => {
-    try {
-        if (isOnline) {
-            // Device is online - update online status and system_mode
-            database.db.run(
-                'UPDATE current_status SET online = 1, system_mode = ? WHERE device_id = ?',
-                ['online', deviceId],
-                function(err) {
-                    if (err) {
-                        console.error('❌ Error updating device to online:', err);
-                    } else {
-                        console.log(`✅ Updated ${deviceId} to ONLINE`);
+    return new Promise((resolve, reject) => {
+        try {
+            if (isOnline) {
+                // Device is online - update online status and system_mode
+                database.db.run(
+                    'UPDATE current_status SET online = 1, system_mode = ?, last_seen = datetime("now") WHERE device_id = ?',
+                    ['online', deviceId],
+                    function(err) {
+                        if (err) {
+                            console.error('❌ Error updating device to online:', err);
+                            reject(err);
+                        } else {
+                            console.log(`✅ Updated ${deviceId} to ONLINE (changes: ${this.changes})`);
+                            resolve(this.changes);
+                        }
                     }
-                }
-            );
-        } else {
-            // Device is offline - update both online status and system_mode
-            database.db.run(
-                'UPDATE current_status SET online = 0, system_mode = ? WHERE device_id = ?',
-                ['offline', deviceId],
-                function(err) {
-                    if (err) {
-                        console.error('❌ Error updating device to offline:', err);
-                    } else {
-                        console.log(`🔴 Updated ${deviceId} to OFFLINE`);
+                );
+            } else {
+                // Device is offline - update both online status and system_mode
+                database.db.run(
+                    'UPDATE current_status SET online = 0, system_mode = ? WHERE device_id = ?',
+                    ['offline', deviceId],
+                    function(err) {
+                        if (err) {
+                            console.error('❌ Error updating device to offline:', err);
+                            reject(err);
+                        } else {
+                            console.log(`🔴 Updated ${deviceId} to OFFLINE (changes: ${this.changes})`);
+                            resolve(this.changes);
+                        }
                     }
-                }
-            );
+                );
+            }
+        } catch (error) {
+            console.error(`💥 Error updating device status for ${deviceId}:`, error);
+            reject(error);
         }
-    } catch (error) {
-        console.error(`💥 Error updating device status for ${deviceId}:`, error);
-    }
+    });
 };
 
-// SIMPLE: Store reading from ESP32
+// FIXED: Store reading from ESP32 - ensure last_seen is always updated
 exports.storeReading = async (req, res) => {
     try {
         const { 
@@ -96,7 +103,7 @@ exports.storeReading = async (req, res) => {
             auto_mode === true || auto_mode === 'true'
         );
 
-        // Update device as online
+        // FIXED: Wait for the status update to complete
         await updateDeviceStatus(deviceId, true);
 
         res.status(201).json({ 
@@ -219,9 +226,9 @@ exports.getDeviceData = async (req, res) => {
     }
 };
 
-// SIMPLE: Background monitoring - check database and update status
+// FIXED: Background monitoring - ensure updates complete
 exports.startDeviceMonitoring = () => {
-    console.log('🚀 Starting SIMPLE device monitoring service');
+    console.log('🚀 Starting FIXED device monitoring service');
     
     setInterval(async () => {
         try {
@@ -230,7 +237,8 @@ exports.startDeviceMonitoring = () => {
             
             if (offline) {
                 console.log(`🚨 Device ${deviceId} is OFFLINE - updating database`);
-                await updateDeviceStatus(deviceId, false);
+                const changes = await updateDeviceStatus(deviceId, false);
+                console.log(`📝 Database update completed with ${changes} changes`);
             } else {
                 console.log(`✅ Device ${deviceId} is ONLINE`);
             }
@@ -239,19 +247,20 @@ exports.startDeviceMonitoring = () => {
         }
     }, MONITORING_INTERVAL);
     
-    logger.info('Simple device monitoring service started');
+    logger.info('Fixed device monitoring service started');
 };
 
-// Manual function to simulate device going offline (for testing)
+// FIXED: Manual function to simulate device going offline
 exports.forceOffline = async (req, res) => {
     try {
         const deviceId = req.query.device_id || 'esp32_air_purifier_01';
         
-        // Manually set device to offline in database
-        await updateDeviceStatus(deviceId, false);
+        // Manually set device to offline in database and wait for completion
+        const changes = await updateDeviceStatus(deviceId, false);
         
         res.json({ 
             message: 'Device forced offline successfully',
+            changes: changes,
             note: 'Database has been updated to reflect offline status'
         });
     } catch (error) {
@@ -260,16 +269,17 @@ exports.forceOffline = async (req, res) => {
     }
 };
 
-// Manual function to simulate device coming online (for testing)
+// FIXED: Manual function to simulate device coming online
 exports.forceOnline = async (req, res) => {
     try {
         const deviceId = req.query.device_id || 'esp32_air_purifier_01';
         
-        // Manually set device to online in database
-        await updateDeviceStatus(deviceId, true);
+        // Manually set device to online in database and wait for completion
+        const changes = await updateDeviceStatus(deviceId, true);
         
         res.json({ 
             message: 'Device forced online successfully',
+            changes: changes,
             note: 'Database has been updated to reflect online status'
         });
     } catch (error) {
@@ -278,7 +288,7 @@ exports.forceOnline = async (req, res) => {
     }
 };
 
-// Test function to see current status
+// FIXED: Enhanced debug function to check current status
 exports.checkCurrentStatus = async (req, res) => {
     try {
         const deviceId = req.query.device_id || 'esp32_air_purifier_01';
@@ -287,12 +297,29 @@ exports.checkCurrentStatus = async (req, res) => {
         const status = await database.getLatestStatus(deviceId);
         const offline = await isDeviceOffline(deviceId);
         
+        // Additional debug: Check database directly
+        const dbStatus = await new Promise((resolve, reject) => {
+            database.db.get(
+                'SELECT online, system_mode, last_seen FROM current_status WHERE device_id = ?',
+                [deviceId],
+                (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row);
+                }
+            );
+        });
+        
         res.json({
             device_id: deviceId,
             database_system_mode: status ? status.system_mode : 'unknown',
             database_online_status: status ? status.online : 'unknown',
             database_last_seen: status ? status.last_seen : null,
+            direct_db_online: dbStatus ? dbStatus.online : 'unknown',
+            direct_db_system_mode: dbStatus ? dbStatus.system_mode : 'unknown',
+            direct_db_last_seen: dbStatus ? dbStatus.last_seen : null,
             should_be_offline: offline,
+            current_time: new Date().toISOString(),
+            threshold_seconds: OFFLINE_THRESHOLD / 1000,
             note: 'Database is the single source of truth for device status'
         });
     } catch (error) {
@@ -383,8 +410,8 @@ exports.createDevice = async (req, res) => {
 
         database.db.run(
             'INSERT INTO devices (device_id, name, location, user_id) VALUES (?, ?, ?, ?)',
-  [defaultDeviceId, 'Main Air Purifier', 'Living Room', 1], 
-  function (err){
+            [device_id, name, location, 1], 
+            function (err){
                 if (err) {
                     logger.error('Error creating device:', err);
                     return res.status(500).json({ error: 'Failed to create device' });
@@ -541,7 +568,6 @@ exports.getSystemStatus = async (req, res) => {
     }
 };
 
-// Simple device registration - user provides all details
 // Updated device registration - accepts frontend field names
 exports.registerDevice = async (req, res) => {
   try {
@@ -659,7 +685,6 @@ exports.registerDevice = async (req, res) => {
   }
 };
 
-// Get user's devices
 // Get user's devices - UPDATED VERSION
 exports.getUserDevices = (req, res) => {
   try {
@@ -731,24 +756,24 @@ exports.getUserDevices = (req, res) => {
       }
 
       // Process the devices
-const devices = rows.map(device => {
-  return {
-    device_id: device.device_id,
-    name: device.name,
-    location: device.location,
-    online: device.online === 1,
-    system_mode: device.system_mode,
-    last_seen: device.last_seen,
-    created_at: device.created_at,
-    // Only return credentials to device owners, not shared users
-    device_username: device.access_type === 'owner' ? device.device_username : undefined,
-    password: device.access_type === 'owner' ? device.device_password : undefined,
-    access_type: device.access_type,
-    shared_by_username: device.shared_by_username,
-    is_shared: device.access_type === 'shared_view',
-    can_edit: device.access_type === 'owner'
-  };
-});
+      const devices = rows.map(device => {
+        return {
+          device_id: device.device_id,
+          name: device.name,
+          location: device.location,
+          online: device.online === 1,
+          system_mode: device.system_mode,
+          last_seen: device.last_seen,
+          created_at: device.created_at,
+          // Only return credentials to device owners, not shared users
+          device_username: device.access_type === 'owner' ? device.device_username : undefined,
+          password: device.access_type === 'owner' ? device.device_password : undefined,
+          access_type: device.access_type,
+          shared_by_username: device.shared_by_username,
+          is_shared: device.access_type === 'shared_view',
+          can_edit: device.access_type === 'owner'
+        };
+      });
 
       console.log('🎯 Sending response with device-specific credentials');
       

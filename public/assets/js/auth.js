@@ -154,7 +154,7 @@ async function apiFetch(endpoint, options = {}) {
     }
 }
 
-// Check authentication status - FIXED
+// Check authentication status - FIXED VERSION
 async function checkAuthentication() {
     try {
         Logger.log('Checking authentication status...');
@@ -170,9 +170,9 @@ async function checkAuthentication() {
             tokenPreview: token.substring(0, 20) + '...'
         });
         
-        // Use direct fetch to avoid circular issues
+        // Use the auth verify endpoint instead of /api/user
         const baseURL = getBaseURL();
-        const response = await fetch(`${baseURL}/api/user`, {
+        const response = await fetch(`${baseURL}/api/auth/verify`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${token}`,
@@ -188,9 +188,15 @@ async function checkAuthentication() {
         
         if (response.status === 401) {
             Logger.warn('Token invalid or expired');
-            localStorage.removeItem('authToken');
-            localStorage.removeItem('isAuthenticated');
+            this.clearAuthData();
             return false;
+        }
+        
+        if (response.status === 403) {
+            Logger.log('User authenticated but not admin - this is OK for regular users');
+            // 403 is OK for regular users - they're still authenticated
+            localStorage.setItem('isAuthenticated', 'true');
+            return true;
         }
         
         if (!response.ok) {
@@ -198,12 +204,13 @@ async function checkAuthentication() {
         }
         
         const data = await response.json();
-        Logger.log('User data received:', data);
+        Logger.log('Auth verification response:', data);
         
-        if (data.user && data.user.username) {
+        if (data.valid && data.user) {
             Logger.info('User authenticated', { username: data.user.username });
             localStorage.setItem('isAuthenticated', 'true');
             localStorage.setItem('username', data.user.username);
+            localStorage.setItem('isAdmin', data.user.is_admin || false);
             return true;
         }
         
@@ -211,10 +218,19 @@ async function checkAuthentication() {
         
     } catch (error) {
         Logger.error('Auth check failed:', error);
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('isAuthenticated');
+        this.clearAuthData();
         return false;
     }
+}
+
+// Add this helper function
+function clearAuthData() {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('isAuthenticated');
+    localStorage.removeItem('username');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('isAdmin');
 }
 
 // Main authentication function
@@ -257,31 +273,32 @@ async function authenticateUser(username, password) {
         const data = await response.json();
         Logger.log('Login successful', Logger.sanitizeData(data));
 
-        // Store tokens and user data
-        if (data.accessToken) {
-            localStorage.setItem('authToken', data.accessToken);
-            localStorage.setItem('refreshToken', data.refreshToken);
-            localStorage.setItem('isAuthenticated', 'true');
-            localStorage.setItem('username', data.username);
-            localStorage.setItem('userId', data.userId);
-            localStorage.setItem('isAdmin', data.is_admin || false);
-            
-            Logger.info('Tokens stored successfully', {
-                hasAccessToken: !!data.accessToken,
-                username: data.username
-            });
-            
-            // Show success feedback
-            showLoginSuccess('Login successful! Redirecting...');
-            
-            // Redirect to device selection after short delay
-            setTimeout(() => {
-                window.location.href = '../devices/';
-            }, 1000);
-            
-        } else {
-            throw new Error('No access token received from server');
-        }
+       // In authenticateUser function, after successful login:
+if (data.accessToken) {
+    localStorage.setItem('authToken', data.accessToken);
+    localStorage.setItem('refreshToken', data.refreshToken);
+    localStorage.setItem('isAuthenticated', 'true');
+    localStorage.setItem('username', data.username);
+    localStorage.setItem('userId', data.userId);
+    localStorage.setItem('isAdmin', data.is_admin || data.user?.is_admin || false);
+    
+    Logger.info('Login successful', {
+        username: data.username,
+        isAdmin: localStorage.getItem('isAdmin')
+    });
+    
+    // Show success feedback
+    showLoginSuccess('Login successful! Redirecting...');
+    
+    // Determine redirect based on user role
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    const redirectPath = isAdmin ? '../admin/' : '../devices/';
+    
+    // Redirect after short delay
+    setTimeout(() => {
+        window.location.href = redirectPath;
+    }, 1000);
+}
         
     } catch (error) {
         Logger.error('Login error occurred', error);
@@ -361,4 +378,45 @@ function debugTokenStatus() {
         isAuthenticated: isAuthenticated,
         username: username
     });
+}
+
+// Route protection logic
+async function protectRoute(requireAdmin = false) {
+    try {
+        const isAuthenticated = await checkAuthentication();
+        
+        if (!isAuthenticated) {
+            Logger.warn('User not authenticated, redirecting to login');
+            window.location.href = '/auth/login.html';
+            return false;
+        }
+        
+        const isAdmin = localStorage.getItem('isAdmin') === 'true';
+        const currentPath = window.location.pathname;
+        
+        // Check if user is trying to access admin routes without admin privileges
+        if (requireAdmin && !isAdmin) {
+            Logger.warn('Non-admin user attempted to access admin area', { 
+                path: currentPath,
+                isAdmin: isAdmin 
+            });
+            window.location.href = '../devices/'; // Redirect to user dashboard
+            return false;
+        }
+        
+        // Regular users should not access /admin routes
+        if (currentPath.includes('/admin') && !isAdmin) {
+            Logger.warn('Non-admin user attempted to access admin route', { 
+                path: currentPath 
+            });
+            window.location.href = '../devices/';
+            return false;
+        }
+        
+        return true;
+    } catch (error) {
+        Logger.error('Route protection error:', error);
+        window.location.href = '/auth/login.html';
+        return false;
+    }
 }

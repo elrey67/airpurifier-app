@@ -2,15 +2,76 @@
 document.addEventListener('DOMContentLoaded', function () {
     Logger.log('Device selection page loaded');
     initializeDevicesPage();
+    setupNavigationGuard();
+        const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    const adminLink = document.getElementById('admin-link');
+    if (adminLink && isAdmin) {
+        adminLink.style.display = 'block';
+    }
+
 });
+
+// In your devices page JavaScript
+document.addEventListener('DOMContentLoaded', async function() {
+    try {
+        await checkAuthentication();
+        
+        // Instead of protectRoute, check if user is authenticated
+        const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+        if (!isAuthenticated) {
+            handleUnauthenticatedState();
+            return;
+        }
+        
+        // Load devices and setup UI based on admin status
+        loadUserDevices();
+        setupUIForUserRole();
+        
+    } catch (error) {
+        Logger.error('Page initialization failed:', error);
+    }
+});
+
+function setupUIForUserRole() {
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    
+    // Hide admin navigation
+    const adminLink = document.getElementById('admin-link');
+    const adminNav = document.getElementById('admin-nav');
+    
+    if (adminLink) adminLink.style.display = isAdmin ? 'block' : 'none';
+    if (adminNav) adminNav.style.display = isAdmin ? 'block' : 'none';
+    
+    // Hide add device form for regular users
+    hideAddDeviceFormForRegularUsers();
+    
+    // Setup navigation guard for admin pages
+    setupNavigationGuard();
+}
+
+
+function setupNavigationGuard() {
+    // Only prevent access to admin pages, not the devices page
+    const currentPath = window.location.pathname;
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    
+    // Only redirect if trying to access admin pages without admin privileges
+    if (currentPath.includes('/admin') && !isAdmin) {
+        Logger.warn('Non-admin user accessed admin path, redirecting to devices');
+        window.location.href = '../devices/';
+    }
+}
 
 // Initialize the devices page
 async function initializeDevicesPage() {
     try {
         await checkAuthentication();
         await loadUserDevices();
+        hideAddDeviceFormForRegularUsers();
         
-        // Set up event listeners
+        // Set up event listeners ONLY for admin users
+        const isAdmin = localStorage.getItem('isAdmin') === 'true';
+        
         const logoutBtn = document.getElementById('logout-btn');
         if (logoutBtn) {
             logoutBtn.addEventListener('click', function(e) {
@@ -19,15 +80,16 @@ async function initializeDevicesPage() {
             });
         }
         
+        // ONLY allow admins to add devices
         const addDeviceForm = document.getElementById('add-device-form');
-        if (addDeviceForm) {
+        if (addDeviceForm && isAdmin) {
             addDeviceForm.addEventListener('submit', addNewDevice);
         }
         
         // Initialize modal listeners
         initializeModalListeners();
         
-        // ADD THIS: Initialize mobile menu
+        // Initialize mobile menu
         initializeMobileMenu();
         
     } catch (error) {
@@ -40,7 +102,7 @@ async function initializeDevicesPage() {
 const Logger = {
     getEnvironment: function () {
         const hostname = window.location.hostname;
-        return hostname.includes('.com') ? 'production' : 'development';
+        return hostname.includes('.3000') ? 'production' : 'development';
     },
 
     isDebugEnabled: function () {
@@ -168,8 +230,7 @@ async function apiFetch(endpoint, options = {}) {
     }
 }
 
-// Authentication check - FIXED to send token
-// Authentication check (updated to match reference pattern)
+//Authentication check
 async function checkAuthentication() {
     try {
         Logger.log('Checking authentication status...');
@@ -178,7 +239,7 @@ async function checkAuthentication() {
         if (!token) {
             Logger.warn('No auth token found');
             handleUnauthenticatedState();
-            return;
+            return false;
         }
 
         const baseURL = getBaseURL();
@@ -191,15 +252,10 @@ async function checkAuthentication() {
             credentials: 'include'
         });
 
-        Logger.log('Response from /api/user:', {
-            status: response.status,
-            ok: response.ok
-        });
-
         if (response.status === 401) {
             Logger.warn('User not authenticated');
             handleUnauthenticatedState();
-            return;
+            return false;
         }
 
         if (!response.ok) {
@@ -207,20 +263,31 @@ async function checkAuthentication() {
         }
 
         const data = await response.json();
-        Logger.log('User data received:', data);
-
-        if (!data.success || !data.user || !data.user.username) {
-            throw new Error(`Invalid user data received: ${JSON.stringify(data)}`);
+        
+        if (!data.success || !data.user) {
+            throw new Error('Invalid user data received');
         }
 
-        // Update UI for authenticated user
+        // Update both authentication and admin status
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('isAdmin', data.user.isAdmin ? 'true' : 'false');
+        localStorage.setItem('username', data.user.username || 'User');
+        
         updateUIForAuthenticatedUser(data.user);
-        Logger.info('User authenticated', { username: data.user.username });
+        Logger.info('User authenticated', { 
+            username: data.user.username, 
+            isAdmin: data.user.isAdmin 
+        });
+        
+        return true;
+        
     } catch (error) {
         Logger.error('Auth check failed:', error);
         handleUnauthenticatedState();
+        return false;
     }
 }
+
 
 function updateUIForAuthenticatedUser(user) {
     const username = user.username || 'User';
@@ -264,7 +331,9 @@ async function loadUserDevices() {
             return {
                 ...apiDevice,
                 username: localDevice?.username || apiDevice.device_username,
-                password: localDevice?.password || apiDevice.password || apiDevice.device_password // Include password from all sources
+                password: localDevice?.password || apiDevice.password || apiDevice.device_password,
+                // Add view-only flag for regular users
+                can_edit: localStorage.getItem('isAdmin') === 'true'
             };
         });
 
@@ -282,14 +351,20 @@ async function loadUserDevices() {
         
         // Fallback to localStorage if API fails
         const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
-        Logger.log('LocalStorage devices', { count: localDevices.length });
+        // Add view-only flag for regular users in fallback
+        const devicesWithPermissions = localDevices.map(device => ({
+            ...device,
+            can_edit: localStorage.getItem('isAdmin') === 'true'
+        }));
         
-        if (localDevices.length === 0) {
+        Logger.log('LocalStorage devices', { count: devicesWithPermissions.length });
+        
+        if (devicesWithPermissions.length === 0) {
             Logger.info('No devices in localStorage, showing welcome message');
             showWelcomeMessage();
         } else {
-            Logger.info('Displaying devices from localStorage', { count: localDevices.length });
-            displayDevices(localDevices);
+            Logger.info('Displaying devices from localStorage', { count: devicesWithPermissions.length });
+            displayDevices(devicesWithPermissions);
         }
     }
 }
@@ -337,10 +412,22 @@ function displayDevices(devices) {
     const devicesList = document.getElementById('devices-list');
     devicesList.innerHTML = '';
 
+    // Check if user is admin
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+
     devices.forEach(device => {
-        // Add null checks for device properties
+        // Determine if user can edit this device
+        // Regular users can only view, admins can edit all devices
+        const canEdit = isAdmin && (device.can_edit !== false);
+
         const deviceCard = document.createElement('div');
         deviceCard.className = 'device-card';
+        
+        // Add shared device styling for devices shared with regular users
+        if (!canEdit && isAdmin === false) {
+            deviceCard.classList.add('shared-device');
+        }
+        
         deviceCard.innerHTML = `
             <div class="device-header">
                 <div class="device-icon">
@@ -348,6 +435,7 @@ function displayDevices(devices) {
                 </div>
                 <div class="device-info">
                     <h4>${device.name || device.device_name || 'Unnamed Device'}</h4>
+                    ${!canEdit && !isAdmin ? '<span class="shared-badge"><i class="fas fa-share-alt"></i> Shared with you</span>' : ''}
                     <p class="device-location"><i class="fas fa-map-marker-alt"></i> ${device.location || 'Not specified'}</p>
                     <p class="device-id">ID: ${device.device_id || device.id || 'N/A'}</p>
                     <p class="last-seen">Status: ${device.status || device.system_mode || 'unknown'}</p>
@@ -358,49 +446,48 @@ function displayDevices(devices) {
                     ${device.status || device.system_mode || 'Unknown'}
                 </div>
             </div>
-<div class="device-credentials">
-    <div class="credential-item">
-        <label>Device ID:</label>
-        <span class="credential-value">${device.device_id || 'N/A'}</span>
-        ${device.device_id ? `<button class="btn-copy" data-value="${device.device_id}">
-            <i class="fas fa-copy"></i>
-        </button>` : ''}
-    </div>
-    <div class="credential-item">
-        <label>Username:</label>
-        <span class="credential-value">${device.device_username || device.username || 'N/A'}</span>
-        ${(device.device_username || device.username) ? `<button class="btn-copy" data-value="${device.device_username || device.username}">
-            <i class="fas fa-copy"></i>
-        </button>` : ''}
-    </div>
-    <div class="credential-item">
-        <label>Password:</label>
-        <span class="credential-value">${device.device_password || device.password ? '••••••••' : 'N/A'}</span>
-        ${(device.device_password || device.password) ? `<button class="btn-copy" data-value="${device.device_password || device.password}">
-            <i class="fas fa-copy"></i>
-        </button>` : ''}
-    </div>
-</div>
-
-           <div class="device-actions">
-    <button class="btn btn-primary select-device" data-device-id="${device.device_id}">
-        <i class="fas fa-tachometer-alt"></i> View Dashboard
-    </button>
-    ${device.can_edit !== false ? `
-    <button class="btn btn-secondary edit-device" data-device-id="${device.device_id}">
-        <i class="fas fa-edit"></i> Edit
-    </button>
-    <button class="btn btn-info share-device" data-device-id="${device.device_id}">
-        <i class="fas fa-share-alt"></i> Share
-    </button>
-    <button class="btn btn-danger delete-device" data-device-id="${device.device_id}">
-        <i class="fas fa-trash"></i> Delete
-    </button>
-    ` : ''}
-</div>
+            <div class="device-credentials">
+                <div class="credential-item">
+                    <label>Device ID:</label>
+                    <span class="credential-value">${device.device_id || 'N/A'}</span>
+                    ${device.device_id ? `<button class="btn-copy" data-value="${device.device_id}">
+                        <i class="fas fa-copy"></i>
+                    </button>` : ''}
+                </div>
+                <div class="credential-item">
+                    <label>Username:</label>
+                    <span class="credential-value">${device.device_username || device.username || 'N/A'}</span>
+                    ${(device.device_username || device.username) ? `<button class="btn-copy" data-value="${device.device_username || device.username}">
+                        <i class="fas fa-copy"></i>
+                    </button>` : ''}
+                </div>
+                <div class="credential-item">
+                    <label>Password:</label>
+                    <span class="credential-value">${device.device_password || device.password ? '••••••••' : 'N/A'}</span>
+                    ${(device.device_password || device.password) ? `<button class="btn-copy" data-value="${device.device_password || device.password}">
+                        <i class="fas fa-copy"></i>
+                    </button>` : ''}
+                </div>
+            </div>
+            <div class="device-actions">
+                <button class="btn btn-primary select-device" data-device-id="${device.device_id}">
+                    <i class="fas fa-tachometer-alt"></i> View Dashboard
+                </button>
+                ${canEdit ? `
+                <button class="btn btn-secondary edit-device" data-device-id="${device.device_id}">
+                    <i class="fas fa-edit"></i> Edit
+                </button>
+                <button class="btn btn-info share-device" data-device-id="${device.device_id}">
+                    <i class="fas fa-share-alt"></i> Share
+                </button>
+                <button class="btn btn-danger delete-device" data-device-id="${device.device_id}">
+                    <i class="fas fa-trash"></i> Delete
+                </button>
+                ` : ''}
+            </div>
         `;
 
-        // Add event listeners
+        // Add event listeners for actions that should work for all users
         const selectBtn = deviceCard.querySelector('.select-device');
         if (selectBtn) {
             selectBtn.addEventListener('click', (e) => {
@@ -412,41 +499,43 @@ function displayDevices(devices) {
             });
         }
 
-        const editBtn = deviceCard.querySelector('.edit-device');
-        if (editBtn && device.can_edit !== false) {
-            editBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                Logger.log('Editing device', { deviceId: device.device_id || device.id });
-                editDevice(device);
-            });
+        // Only add edit/delete/share listeners for admin users
+        if (canEdit) {
+            const editBtn = deviceCard.querySelector('.edit-device');
+            if (editBtn) {
+                editBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    Logger.log('Editing device', { deviceId: device.device_id || device.id });
+                    editDevice(device);
+                });
+            }
+
+            const deleteBtn = deviceCard.querySelector('.delete-device');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    Logger.log('Delete device clicked', { 
+                        deviceId: device.device_id, 
+                        deviceName: device.name 
+                    });
+                    openDeleteModal(device.device_id, device.name || device.device_name);
+                });
+            }
+
+            const shareBtn = deviceCard.querySelector('.share-device');
+            if (shareBtn) {
+                shareBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    Logger.log('Share device clicked', { 
+                        deviceId: device.device_id, 
+                        deviceName: device.name 
+                    });
+                    openShareModal(device.device_id, device.name);
+                });
+            }
         }
 
-        const deleteBtn = deviceCard.querySelector('.delete-device');
-if (deleteBtn && device.can_edit !== false) {
-    deleteBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        Logger.log('Delete device clicked', { 
-            deviceId: device.device_id, 
-            deviceName: device.name 
-        });
-        // This now calls openDeleteModal instead of the old confirm-based deleteDevice
-        openDeleteModal(device.device_id, device.name || device.device_name);
-    });
-}
-        // Add this in the event listeners section after edit and delete buttons:
-const shareBtn = deviceCard.querySelector('.share-device');
-if (shareBtn && device.can_edit !== false) {
-    shareBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        Logger.log('Share device clicked', { 
-            deviceId: device.device_id, 
-            deviceName: device.name 
-        });
-        openShareModal(device.device_id, device.name);
-    });
-}
-
-        // Add copy functionality
+        // Add copy functionality (works for all users)
         deviceCard.querySelectorAll('.btn-copy').forEach(btn => {
             btn.addEventListener('click', function (e) {
                 e.preventDefault();
@@ -459,6 +548,49 @@ if (shareBtn && device.can_edit !== false) {
 
         devicesList.appendChild(deviceCard);
     });
+
+    // Show message if no devices but user is authenticated
+    if (devices.length === 0) {
+        const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+        if (isAuthenticated) {
+            devicesList.innerHTML = `
+                <div class="welcome-message">
+                    <div class="welcome-icon">
+                        <i class="fas fa-wind fa-3x"></i>
+                    </div>
+                    <h3>No Devices Found</h3>
+                    <p>${isAdmin ? 
+                        'Get started by adding your first air purifier device below.' : 
+                        'No devices have been shared with you yet. Please contact an administrator to get access to devices.'
+                    }</p>
+                    <div class="welcome-features">
+                        <div class="feature">
+                            <i class="fas fa-tachometer-alt"></i>
+                            <span>Real-time monitoring</span>
+                        </div>
+                        <div class="feature">
+                            <i class="fas fa-chart-line"></i>
+                            <span>Historical data</span>
+                        </div>
+                        <div class="feature">
+                            <i class="fas fa-cog"></i>
+                            <span>Remote control</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    }
+}
+
+// Add this function call in your initializeDevicesPage function
+function hideAddDeviceFormForRegularUsers() {
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    const addDeviceCard = document.querySelector('.card:last-child'); // The add device form card
+    
+    if (!isAdmin && addDeviceCard) {
+        addDeviceCard.style.display = 'none';
+    }
 }
 
 
@@ -1144,7 +1276,29 @@ function showFormSuccess(message) {
 function formatTime(dateString) {
     if (!dateString) return 'Never';
 
-    const date = new Date(dateString);
+    // Parse the date string - treat timestamps without timezone as UTC (server time)
+    let date;
+    if (dateString.includes('Z') || dateString.includes('T')) {
+        // ISO format with timezone, parse normally
+        date = new Date(dateString);
+    } else {
+        // Format like '2025-10-01 16:48:51' - treat as UTC and convert to local
+        // Replace space with 'T' and add 'Z' to indicate UTC
+        const isoString = dateString.replace(' ', 'T') + 'Z';
+        date = new Date(isoString);
+        Logger.log('Parsing timestamp as UTC', { 
+            original: dateString, 
+            parsed: isoString,
+            localTime: date.toLocaleString()
+        });
+    }
+
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+        Logger.warn('Invalid date format', { dateString });
+        return 'Unknown';
+    }
+
     const now = new Date();
     const diffMs = now - date;
     const diffMins = Math.floor(diffMs / 60000);
@@ -1152,9 +1306,9 @@ function formatTime(dateString) {
     const diffDays = Math.floor(diffMs / 86400000);
 
     if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins} minutes ago`;
-    if (diffHours < 24) return `${diffHours} hours ago`;
-    if (diffDays < 7) return `${diffDays} days ago`;
+    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+    if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
 
     return date.toLocaleDateString();
 }

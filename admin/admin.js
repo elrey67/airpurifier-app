@@ -51,6 +51,8 @@ class AdminApp {
         this.currentUser = null;
         this.users = [];
         this.tokenRefreshTimeout = null;
+         this.currentDeletionUser = null;
+        this.currentEditUser = null;
         
         Logger.log('AdminApp initialized', {
             hasAuthToken: !!this.authToken,
@@ -86,6 +88,189 @@ class AdminApp {
         return token;
     }
     
+
+       /**
+     * Initialize modal event listeners
+     */
+    initializeModalListeners() {
+        // Delete modal events
+        const deleteModalClose = document.getElementById('delete-modal-close');
+        const deleteModalCancel = document.getElementById('delete-modal-cancel');
+        const deleteUserConfirm = document.getElementById('delete-user-confirm');
+        
+        if (deleteModalClose) deleteModalClose.addEventListener('click', () => this.closeDeleteModal());
+        if (deleteModalCancel) deleteModalCancel.addEventListener('click', () => this.closeDeleteModal());
+        if (deleteUserConfirm) deleteUserConfirm.addEventListener('click', () => this.confirmDeleteUser());
+
+        // Edit modal events
+        const editModalClose = document.getElementById('edit-modal-close');
+        const editModalCancel = document.getElementById('edit-modal-cancel');
+        const editUserConfirm = document.getElementById('edit-user-confirm');
+        
+        if (editModalClose) editModalClose.addEventListener('click', () => this.closeEditModal());
+        if (editModalCancel) editModalCancel.addEventListener('click', () => this.closeEditModal());
+        if (editUserConfirm) editUserConfirm.addEventListener('click', (e) => this.handleEditUser(e));
+
+        // Close modals when clicking outside
+        const deleteModal = document.getElementById('delete-user-modal');
+        const editModal = document.getElementById('edit-user-modal');
+        
+        if (deleteModal) {
+            deleteModal.addEventListener('click', (e) => {
+                if (e.target === deleteModal) {
+                    this.closeDeleteModal();
+                }
+            });
+        }
+        
+        if (editModal) {
+            editModal.addEventListener('click', (e) => {
+                if (e.target === editModal) {
+                    this.closeEditModal();
+                }
+            });
+        }
+        
+        // Close modals with Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.closeDeleteModal();
+                this.closeEditModal();
+            }
+        });
+
+        Logger.log('Modal event listeners initialized');
+    }
+
+    /**
+     * Open delete confirmation modal
+     */
+    openDeleteModal(userId, username) {
+        this.currentDeletionUser = { userId, username };
+        
+        const modal = document.getElementById('delete-user-modal');
+        const userNameElement = document.getElementById('delete-user-name');
+        
+        userNameElement.textContent = username;
+        modal.classList.add('open');
+        
+        Logger.log('Delete modal opened', { userId, username });
+    }
+
+    /**
+     * Close delete confirmation modal
+     */
+    closeDeleteModal() {
+        const modal = document.getElementById('delete-user-modal');
+        modal.classList.remove('open');
+        this.currentDeletionUser = null;
+        
+        Logger.log('Delete modal closed');
+    }
+
+    /**
+     * Confirm and execute user deletion
+     */
+    async confirmDeleteUser() {
+        if (!this.currentDeletionUser) {
+            Logger.warn('No user selected for deletion');
+            return;
+        }
+        
+        const { userId, username } = this.currentDeletionUser;
+        
+        try {
+            Logger.log('Confirming user deletion', { userId, username });
+            
+            const response = await fetch(`/api/users/${userId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP ${response.status}: Failed to delete user`);
+            }
+            
+            Logger.info('User deleted successfully', { userId, username });
+            
+            this.closeDeleteModal();
+            this.loadUsers();
+            this.showMessage(`User "${username}" deleted successfully`, 'success');
+            
+        } catch (error) {
+            Logger.error('User deletion failed', error);
+            this.showMessage(error.message);
+        }
+    }
+
+    /**
+     * Open edit user modal
+     */
+    openEditModal(user) {
+        this.currentEditUser = user;
+        
+        const modal = document.getElementById('edit-user-modal');
+        document.getElementById('edit-user-id').value = user.id;
+        document.getElementById('edit-username').value = user.username;
+        document.getElementById('edit-is-admin').checked = user.is_admin;
+        document.getElementById('edit-password').value = '';
+        
+        modal.classList.add('open');
+        
+        Logger.log('Edit modal opened', { userId: user.id, username: user.username });
+    }
+
+    /**
+     * Close edit user modal
+     */
+    closeEditModal() {
+        const modal = document.getElementById('edit-user-modal');
+        modal.classList.remove('open');
+        this.currentEditUser = null;
+        
+        Logger.log('Edit modal closed');
+    }
+
+    /**
+     * Updated deleteUser method using modal instead of confirm()
+     */
+    async deleteUser(userId) {
+        const user = this.users.find(u => u.id === userId);
+        if (!user) {
+            Logger.warn('User not found for deletion', { userId });
+            return;
+        }
+
+        if (user.id === this.currentUser?.id) {
+            Logger.warn('User attempted to delete themselves', { userId });
+            this.showMessage('You cannot delete your own account');
+            return;
+        }
+
+        // Use modal instead of confirm()
+        Logger.log('Opening delete confirmation modal', { userId, username: user.username });
+        this.openDeleteModal(userId, user.username);
+    }
+
+    /**
+     * Updated editUser method to use modal
+     */
+    editUser(userId) {
+        const user = this.users.find(u => u.id === userId);
+        
+        if (!user) {
+            Logger.warn('User not found for editing', { userId });
+            return;
+        }
+        
+        Logger.log('Editing user via modal', { userId, username: user.username });
+        this.openEditModal(user);
+    }
+
+
     /**
      * Secure token storage - uses sessionStorage (in-memory behavior) :cite[9]
      */
@@ -173,6 +358,8 @@ class AdminApp {
                     }
                 });
             }
+            // Initialize modal listeners
+            this.initializeModalListeners();
             
             Logger.log('All event listeners setup successfully');
         } catch (error) {
@@ -507,24 +694,6 @@ class AdminApp {
         }
     }
     
-    editUser(userId) {
-        const user = this.users.find(u => u.id === userId);
-        
-        if (!user) {
-            Logger.warn('User not found for editing', { userId });
-            return;
-        }
-        
-        Logger.log('Editing user', { userId, username: user.username });
-        
-        document.getElementById('edit-user-id').value = user.id;
-        document.getElementById('edit-username').value = user.username;
-        document.getElementById('edit-is-admin').checked = user.is_admin;
-        document.getElementById('edit-password').value = '';
-        
-        this.showEditModal();
-    }
-    
     async handleEditUser(e) {
         e.preventDefault();
         
@@ -570,50 +739,6 @@ class AdminApp {
         }
     }
     
-    async deleteUser(userId) {
-        const user = this.users.find(u => u.id === userId);
-        if (!user) {
-            Logger.warn('User not found for deletion', { userId });
-            return;
-        }
-        
-        if (user.id === this.currentUser?.id) {
-            Logger.warn('User attempted to delete themselves', { userId });
-            this.showMessage('You cannot delete your own account');
-            return;
-        }
-        
-        if (!confirm(`Are you sure you want to delete user "${user.username}"? This action cannot be undone.`)) {
-            Logger.log('User deletion cancelled by user');
-            return;
-        }
-        
-        Logger.log('Deleting user', { userId, username: user.username });
-        
-        try {
-            const response = await fetch(`/api/users/${userId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Authorization': `Bearer ${this.authToken}`
-                }
-            });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || `HTTP ${response.status}: Failed to delete user`);
-            }
-            
-            this.loadUsers();
-            
-            Logger.info('User deleted successfully', { userId, username: user.username });
-            this.showMessage('User deleted successfully', 'success');
-            
-        } catch (error) {
-            Logger.error('Error deleting user', error);
-            this.showMessage(error.message);
-        }
-    }
-    // Add these methods to the AdminApp class
 
 /**
  * Initialize mobile menu functionality
@@ -755,36 +880,17 @@ showAdminPage() {
     this.syncUserGreeting();
 }
 
-// Update the setupEventListeners method to include home button
 setupEventListeners() {
     try {
         document.getElementById('login-form').addEventListener('submit', (e) => this.handleLogin(e));
         document.getElementById('logout-btn').addEventListener('click', () => this.logout());
         document.getElementById('add-user-form').addEventListener('submit', (e) => this.handleAddUser(e));
-        document.getElementById('edit-user-form').addEventListener('submit', (e) => this.handleEditUser(e));
-        document.getElementById('cancel-edit').addEventListener('click', () => this.hideEditModal());
-        document.querySelector('.close-btn').addEventListener('click', () => this.hideEditModal());
         
-        // Add home button event listener if it exists
-        const homeBtn = document.querySelector('.home-btn');
-        if (homeBtn) {
-            homeBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                Logger.log('Home button clicked, redirecting to dashboard');
-                window.location.href = '/';
-            });
-        }
-        
-        // Close modal when clicking outside
-        const editModal = document.getElementById('edit-user-modal');
-        if (editModal) {
-            editModal.addEventListener('click', (e) => {
-                if (e.target.id === 'edit-user-modal') {
-                    this.hideEditModal();
-                }
-            });
-        }
-        
+        // Remove these outdated listeners - they reference old modal system
+        // document.getElementById('edit-user-form').addEventListener('submit', (e) => this.handleEditUser(e));
+        // document.getElementById('cancel-edit').addEventListener('click', () => this.hideEditModal());
+        // document.querySelector('.close-btn').addEventListener('click', () => this.hideEditModal());
+
         // Event delegation for dynamically created buttons
         const usersTable = document.getElementById('users-table-body');
         if (usersTable) {
@@ -799,6 +905,9 @@ setupEventListeners() {
                 }
             });
         }
+        
+        // Initialize modal listeners (for new modal system)
+        this.initializeModalListeners();
         
         Logger.log('All event listeners setup successfully');
     } catch (error) {
@@ -842,5 +951,14 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     adminApp = new AdminApp();
+});
+
+// In your admin page JavaScript  
+document.addEventListener('DOMContentLoaded', async function() {
+    const isAuthenticated = await protectRoute(true); // Require admin
+    if (!isAuthenticated) return;
+    
+    // Load admin-specific content
+    loadAdminData();
 });
 

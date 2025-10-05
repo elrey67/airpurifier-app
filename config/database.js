@@ -102,11 +102,23 @@ const db = new sqlite3.Database(dbPath, (err) => {
         processed_at DATETIME,
         FOREIGN KEY (device_id) REFERENCES devices (device_id) ON DELETE CASCADE
       )`);
+      
+      // User sessions table for authentication
+db.run(`CREATE TABLE IF NOT EXISTS user_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  refresh_token TEXT UNIQUE NOT NULL, 
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+)`);
 
       // Create indexes for better performance
       db.run('CREATE INDEX IF NOT EXISTS idx_readings_device_id ON readings(device_id)');
       db.run('CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)');
       db.run('CREATE INDEX IF NOT EXISTS idx_command_queue_status ON command_queue(status)');
+     db.run('CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(refresh_token)');  // ← Changed
+
 
       // Check if we need to create a default admin user and device
       createDefaultAdminUser();

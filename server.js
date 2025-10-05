@@ -1,29 +1,23 @@
+// Add this at the very top, before any requires
+console.log('=== SERVER.JS STARTING ===');
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-const fs = require('fs');
-const https = require('https');
 const { generalLimiter } = require('./middleware/rateLimit');
 const apiRoutes = require('./routes/api');
 const logger = require('./utils/logger');
 require('./config/database');
 const bcrypt = require('bcryptjs'); 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '172.20.10.3';
+const PORT = process.env.PORT || 3001;
+
+console.log('=== EXPRESS APP CREATED ===');
+console.log('=== PORT:', PORT, '===');
 
 const deviceController = require('./controllers/deviceController');
-
-// SSL certificate configuration
-const sslOptions = {
-    key: fs.readFileSync(path.join(__dirname, 'server.key')),
-    cert: fs.readFileSync(path.join(__dirname, 'server.crt'))
-};
-
-// Create HTTPS server
-const httpsServer = https.createServer(sslOptions, app);
 
 // Store server instance for graceful shutdown
 let server;
@@ -32,8 +26,8 @@ let server;
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      "script-src": ["'self'", "'unsafe-inline'"],
-      "style-src": ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+      "script-src": ["'self'", "'unsafe-inline'", "https://code.jquery.com", "https://cdn.datatables.net"],
+      "style-src": ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.datatables.net"],
       "font-src": ["'self'", "https://cdnjs.cloudflare.com", "data:"],
       "img-src": ["'self'", "data:"]
     }
@@ -43,18 +37,11 @@ app.use(helmet({
 // CORS configuration
 app.use(cors({
   origin: [
-    `https://${HOST}:${PORT}`,
     'http://airpurifier.electronicsideas.com',
     'https://airpurifier.electronicsideas.com',
-    'https://localhost:3000',
-    'https://localhost',
-    'https://172.20.10.2:3000',
-    'https://172.20.10.2:3000/script.js',
-    'https://172.20.10.2:3000/style.css',
-    'https://172.20.10.2:3000/admin/admin.js',
-    'https://172.20.10.2:3000/admin/admin.css',
-        'http://172.20.10.3', // ADD THIS LINE
-    'https://172.20.10.3' // ADD THIS LINE FOR HTTPS
+    'https://airpurifier.electronicsideas.com/style.css',
+    'https://airpurifier.electronicsideas.com/admin/admin.js',
+    'https://airpurifier.electronicsideas.com/admin/admin.css'
   ],
   credentials: true
 }));
@@ -110,8 +97,7 @@ app.get('/api-info', (req, res) => {
       health: '/health',
       api: '/api',
       admin: '/admin'
-    },
-    server: `${HOST}:${PORT}`
+    }
   });
 });
 
@@ -142,8 +128,10 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+console.log('=== STARTING DEVICE MONITORING ===');
 deviceController.startDeviceMonitoring();
 logger.info('Device monitoring service initialized');
+console.log('=== DEVICE MONITORING STARTED ===');
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {
@@ -179,66 +167,70 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-
-// Generate a nonce for each request
-app.use((req, res, next) => {
-  res.locals.nonce = crypto.randomBytes(16).toString('base64');
-  next();
-});
-
-// Set CSP header with nonce
-app.use((req, res, next) => {
-  res.setHeader(
-    'Content-Security-Policy',
-    `script-src 'self' 'nonce-${res.locals.nonce}'`
-  );
-  next();
-});
-
+app.set('trust proxy', 1); 
 
 // Function to start server
 const startServer = () => {
+  console.log('=== STARTSERVER FUNCTION CALLED ===');
   return new Promise((resolve, reject) => {
-    // Use httpsServer instead of app.listen
-    server = httpsServer.listen(PORT, HOST, () => {
-      logger.info(`HTTPS Server running on https://${HOST}:${PORT}`);
-      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-      logger.info(`Allowed domains: ${process.env.APP_URL}, airpurifier.electronicsideas.com`);
-      logger.info(`Serving frontend from: ${path.join(__dirname, 'public')}`);
-      resolve(server);
-    });
-    
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        logger.error(`Port ${PORT} is already in use on ${HOST}`);
-        reject(err);
-      } else {
-        reject(err);
+    try {
+      // Listen on all interfaces (0.0.0.0) for Passenger
+      server = app.listen(PORT, '0.0.0.0', () => {
+        console.log('=== SERVER LISTENING CALLBACK FIRED ===');
+        logger.info(`HTTP Server running on port ${PORT}`);
+        logger.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
+        logger.info(`Running under: ${process.env.PASSENGER_APP_ENV || 'standalone'}`);
+        logger.info(`Allowed domains: ${process.env.APP_URL}, airpurifier.electronicsideas.com`);
+        logger.info(`Serving frontend from: ${path.join(__dirname, 'public')}`);
+        resolve(server);
+      });
+      
+      if (server) {
+        server.on('error', (err) => {
+          console.log('=== SERVER ERROR EVENT ===', err);
+          if (err.code === 'EADDRINUSE') {
+            logger.error(`Port ${PORT} is already in use`);
+            reject(err);
+          } else {
+            reject(err);
+          }
+        });
       }
-    });
+    } catch (err) {
+      console.log('=== ERROR IN STARTSERVER ===', err);
+      logger.error('Failed to start server', { error: err.message });
+      reject(err);
+    }
   });
 };
 
-// Graceful shutdown function
+// Graceful shutdown function (Passenger-compatible)
 const gracefulShutdown = (signal) => {
   return () => {
     logger.info(`Received ${signal}, shutting down gracefully`);
     
-    server.close((err) => {
-      if (err) {
-        logger.error('Error during shutdown', { error: err.message });
-        process.exit(1);
-      }
+    // Check if server exists before trying to close it
+    if (server && typeof server.close === 'function') {
+      server.close((err) => {
+        if (err) {
+          logger.error('Error during shutdown', { error: err.message });
+          process.exit(1);
+        }
+        
+        logger.info('Server closed successfully');
+        process.exit(0);
+      });
       
-      logger.info('Server closed successfully');
+      // Force close after 10 seconds
+      setTimeout(() => {
+        logger.error('Could not close connections in time, forcefully shutting down');
+        process.exit(1);
+      }, 10000);
+    } else {
+      // If no server instance (Passenger manages it), just exit gracefully
+      logger.info('No server instance to close (managed by Passenger)');
       process.exit(0);
-    });
-    
-    // Force close after 10 seconds
-    setTimeout(() => {
-      logger.error('Could not close connections in time, forcefully shutting down');
-      process.exit(1);
-    }, 10000);
+    }
   };
 };
 
@@ -246,124 +238,50 @@ const gracefulShutdown = (signal) => {
 process.on('SIGTERM', gracefulShutdown('SIGTERM'));
 process.on('SIGINT', gracefulShutdown('SIGINT'));
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions (with server check)
 process.on('uncaughtException', (error) => {
+  console.log('=== UNCAUGHT EXCEPTION ===', error);
   logger.error('Uncaught Exception', { 
     error: error.message, 
     stack: error.stack 
   });
-  process.exit(1);
+  
+  // Don't try to close undefined server
+  if (server && typeof server.close === 'function') {
+    server.close(() => process.exit(1));
+  } else {
+    process.exit(1);
+  }
 });
 
-// Handle unhandled rejections
+// Handle unhandled rejections (with server check)
 process.on('unhandledRejection', (reason, promise) => {
+  console.log('=== UNHANDLED REJECTION ===', reason);
   logger.error('Unhandled Rejection', { 
     reason: reason.message || reason, 
     promise 
   });
-  process.exit(1);
+  
+  // Don't try to close undefined server
+  if (server && typeof server.close === 'function') {
+    server.close(() => process.exit(1));
+  } else {
+    process.exit(1);
+  }
 });
 
-// Function to kill processes on the port
-const killProcessesOnPort = (port) => {
-  const { exec } = require('child_process');
-  
-  return new Promise((resolve, reject) => {
-    // For Windows systems
-    if (process.platform === 'win32') {
-      exec(`netstat -ano | findstr :${port}`, (err, stdout) => {
-        if (err) {
-          logger.warn(`No processes found on port ${port} or error checking: ${err.message}`);
-          return resolve();
-        }
-        
-        const lines = stdout.split('\n');
-        const pids = lines.map(line => {
-          const match = line.trim().split(/\s+/);
-          return match[match.length - 1];
-        }).filter(pid => pid && pid !== 'PID');
-        
-        if (pids.length === 0) {
-          logger.info(`No processes found on port ${port}`);
-          return resolve();
-        }
-        
-        logger.warn(`Found ${pids.length} process(es) on port ${port}, killing them: ${pids.join(', ')}`);
-        
-        // Kill all processes
-        const killPromises = pids.map(pid => {
-          return new Promise((killResolve, killReject) => {
-            exec(`taskkill /F /PID ${pid}`, (killErr) => {
-              if (killErr) {
-                logger.error(`Error killing process ${pid}: ${killErr.message}`);
-                return killReject(killErr);
-              }
-              killResolve();
-            });
-          });
-        });
-        
-        Promise.all(killPromises)
-          .then(() => {
-            logger.info(`Successfully killed processes on port ${port}`);
-            resolve();
-          })
-          .catch(reject);
-      });
-    } else {
-      // For Linux/Mac systems
-      exec(`lsof -ti:${port}`, (err, stdout) => {
-        if (err) {
-          // No processes found on port is not an error for us
-          if (err.message.includes('command not found')) {
-            logger.warn('lsof command not available, cannot check for processes on port');
-          } else {
-            logger.warn(`No processes found on port ${port} or error checking: ${err.message}`);
-          }
-          return resolve();
-        }
-        
-        const pids = stdout.trim().split('\n').filter(pid => pid !== '');
-        
-        if (pids.length === 0) {
-          logger.info(`No processes found on port ${port}`);
-          return resolve();
-        }
-        
-        logger.warn(`Found ${pids.length} process(es) on port ${port}, killing them: ${pids.join(', ')}`);
-        
-        exec(`kill -9 ${pids.join(' ')}`, (killErr) => {
-          if (killErr) {
-            logger.error(`Error killing processes on port ${port}: ${killErr.message}`);
-            return reject(killErr);
-          }
-          
-          logger.info(`Successfully killed processes on port ${port}`);
-          resolve();
-        });
-      });
-    }
-  });
-};
-
-// Main function to start the application
+// Main function to start the application (Passenger-compatible)
 const main = async () => {
+  console.log('=== MAIN FUNCTION CALLED ===');
   try {
-    // Database initialization (including admin creation) happens when we require the database file
-    logger.info('Initializing database...');
-    
-    // Try to kill any processes on our port first
-    await killProcessesOnPort(PORT);
-    
-    // Small delay to ensure port is freed
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Start the server
-    await startServer();
-    
-    logger.info('Application started successfully');
+    logger.info('Initializing application for Passenger...');
+    // REMOVE the call to startServer().
+    // Passenger will automatically call app.listen() for you.
+    console.log('=== APPLICATION INITIALIZED, READY FOR PASSENGER ===');
+    logger.info('Application initialized successfully for Passenger');
   } catch (error) {
-    logger.error('Failed to start application', { 
+    console.log('=== ERROR IN MAIN ===', error);
+    logger.error('Failed to initialize application', { 
       error: error.message, 
       stack: error.stack 
     });
@@ -371,9 +289,19 @@ const main = async () => {
   }
 };
 
-// Start the application if this file is run directly
+console.log('=== CHECKING IF MAIN MODULE ===');
+console.log('require.main === module:', require.main === module);
+
+// Start the application if this file is run directly (e.g., node server.js)
 if (require.main === module) {
+  console.log('=== RUNNING STANDALONE, CALLING MAIN() ===');
   main();
+} else {
+  console.log('=== RUNNING UNDER PASSENGER, INITIALIZING APP ===');
+  // When required by Passenger, just initialize the app but don't call .listen()
+  // You can run any necessary setup here, but do not start the server.
+  main(); // This will run your init code without starting the server.
 }
 
-module.exports = { app, server, startServer, gracefulShutdown };
+// Export just the app instance. Passenger looks for `app` or `application` by default.
+module.exports = app;

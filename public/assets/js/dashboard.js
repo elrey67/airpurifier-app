@@ -356,6 +356,33 @@ async function refreshToken() {
 document.addEventListener('DOMContentLoaded', function () {
     Logger.log('Dashboard page loaded');
     initializeDashboard();
+    setupNavigationGuard();
+        const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    const adminLink = document.getElementById('admin-link');
+    if (adminLink && isAdmin) {
+        adminLink.style.display = 'block';
+    }
+});
+
+
+function setupNavigationGuard() {
+    // Check current path on page load
+    const currentPath = window.location.pathname;
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    
+    if (currentPath.includes('/admin') && !isAdmin) {
+        Logger.warn('Non-admin user accessed admin path, redirecting');
+        window.location.href = '../devices/';
+    }
+}
+
+// In your devices page JavaScript
+document.addEventListener('DOMContentLoaded', async function() {
+    const isAuthenticated = await protectRoute(false); // Don't require admin
+    if (!isAuthenticated) return;
+    
+    // Load user-specific devices
+    loadUserDevices();
 });
 
 // Initialize the dashboard page - NEW FUNCTION MATCHING DEVICES.JS STRUCTURE
@@ -393,7 +420,6 @@ async function initializeDashboard() {
         }
 
         // Load initial historical data
-        await loadInitialHistoricalData();
         await loadInitialHistoricalData();
         await loadThresholdFromDatabase();
 
@@ -530,13 +556,6 @@ async function loadPaginatedData(page = 1, limit = null) {
     return { data: [], total: 0, page: 1, limit: recordsPerPage };
 }
 
-// Add event listener for records per page change
-document.getElementById('records-per-page').addEventListener('change', function () {
-    recordsPerPage = parseInt(this.value);
-    currentPage = 1; // Reset to first page
-    renderTable(); // Re-render the table
-    renderPagination(); // Update pagination buttons
-});
 
 // Add current reading to history and database
 function addToHistory(data) {
@@ -741,6 +760,18 @@ function initializeEventListeners() {
         thresholdSlider.addEventListener('input', updateThreshold);
         Logger.log('Threshold slider initialized');
     }
+
+    // Records per page selector
+const recordsPerPageSelect = document.getElementById('records-per-page');
+if (recordsPerPageSelect) {
+    recordsPerPageSelect.addEventListener('change', function () {
+        recordsPerPage = parseInt(this.value);
+        currentPage = 1;
+        updateHistoryTable();
+        Logger.log(`Records per page changed to: ${recordsPerPage}`);
+    });
+    Logger.log('Records per page selector initialized');
+}
 
     // History tabs
     const historyTabs = document.querySelectorAll('.history-tab');

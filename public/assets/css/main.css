@@ -201,3 +201,7 @@ body {
         padding: 1.5rem;
     }
 }
+
+#admin-link{
+    display:none;
+}

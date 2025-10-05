@@ -1,6 +1,6 @@
-// middleware/auth.js - Updated version
+// middleware/auth.js - Fixed version
 const jwt = require('jsonwebtoken');
-const { db } = require('../config/database'); // Make sure to destructure db
+const { db } = require('../config/database');
 
 module.exports = (req, res, next) => {
   try {
@@ -19,8 +19,8 @@ module.exports = (req, res, next) => {
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
     
-    // Verify user still exists
-    db.get('SELECT id FROM users WHERE id = ?', [decoded.userId], (err, user) => {
+    // Verify user still exists and get admin status
+    db.get('SELECT id, is_admin FROM users WHERE id = ?', [decoded.userId || decoded.id], (err, user) => {
       if (err) {
         console.error('Database error in auth middleware:', err);
         if (req.path === '/api/auth/verify') {
@@ -36,7 +36,10 @@ module.exports = (req, res, next) => {
         return res.status(401).json({ error: 'Token is not valid' });
       }
       
-      req.userId = decoded.userId;
+      // Set user information on request object
+      req.userId = user.id;
+      req.isAdmin = Boolean(user.is_admin); // Ensure boolean value
+      
       next();
     });
   } catch (error) {
@@ -48,6 +51,6 @@ module.exports = (req, res, next) => {
         details: error.message 
       });
     }
-    res.status(400).json({ error: 'Invalid token' });
+    res.status(401).json({ error: 'Invalid token' });
   }
 };
