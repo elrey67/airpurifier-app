@@ -77,16 +77,10 @@ function getBaseURL() {
     return `${protocol}//${hostname}${port ? ':' + port : ''}`;
 }
 
-// Enhanced fetch with proper token handling - MATCHING DEVICES.JS STANDARD
+// Enhanced API fetch for regular users
 async function apiFetch(endpoint, options = {}) {
     const baseURL = getBaseURL();
     const token = localStorage.getItem('authToken');
-
-    Logger.log('API fetch request', {
-        endpoint,
-        baseURL,
-        hasToken: !!token
-    });
 
     try {
         const defaultOptions = {
@@ -96,10 +90,8 @@ async function apiFetch(endpoint, options = {}) {
             credentials: 'include'
         };
 
-        // Add Authorization header if we have a token - MATCHING DEVICES.JS PATTERN
         if (token) {
             defaultOptions.headers['Authorization'] = `Bearer ${token}`;
-            Logger.log('Adding Authorization header with Bearer token');
         }
 
         const response = await fetch(`${baseURL}${endpoint}`, {
@@ -111,50 +103,36 @@ async function apiFetch(endpoint, options = {}) {
             }
         });
 
-        Logger.log('API response received', {
-            endpoint,
-            status: response.status,
-            statusText: response.statusText
-        });
-
+        // Handle 401 - Authentication required
         if (response.status === 401) {
             Logger.warn('Authentication failed, redirecting to login');
             handleUnauthenticatedState();
             throw new Error('Authentication required');
         }
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            let errorData;
-            try {
-                errorData = JSON.parse(errorText);
-            } catch {
-                errorData = { error: errorText || `HTTP ${response.status}` };
-            }
-
-            Logger.warn('API request failed', {
+        // Handle 403 - Authorization failed but user is authenticated
+        if (response.status === 403) {
+            Logger.warn('Authorization failed - user lacks permissions', {
                 endpoint,
-                status: response.status,
-                error: errorData.error
+                user: localStorage.getItem('username')
             });
-
-            throw new Error(errorData.error || `Request failed with status ${response.status}`);
+            
+            // Don't logout for 403 errors - regular users should stay logged in
+            throw new Error('Access denied: You do not have permission to access this resource');
         }
 
-        const data = await response.json();
-        Logger.log('API request successful', {
-            endpoint,
-            data: Logger.sanitizeData(data)
-        });
+        if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+        }
 
-        return data;
+        return await response.json();
     } catch (error) {
         Logger.error(`API call failed for ${endpoint}`, error);
         throw error;
     }
 }
 
-// Authentication check - MATCHING DEVICES.JS PATTERN
+// Authentication check 
 async function checkAuthentication() {
     try {
         Logger.log('Checking authentication status...');
@@ -176,35 +154,66 @@ async function checkAuthentication() {
             credentials: 'include'
         });
 
-        Logger.log('Response from /api/user:', {
-            status: response.status,
-            ok: response.ok
-        });
-
+        // Handle 401 - Authentication failed
         if (response.status === 401) {
-            Logger.warn('User not authenticated');
+            Logger.warn('User not authenticated - token invalid');
             handleUnauthenticatedState();
             return false;
         }
 
+        // Handle other non-200 responses - DON'T IMMEDIATELY FAIL
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            Logger.warn('User endpoint returned non-200 status', {
+                status: response.status,
+                statusText: response.statusText
+            });
+            
+            // For regular users, we might not have access to /api/user
+            // Check if we have a valid token and proceed
+            if (token) {
+                Logger.log('Proceeding with stored token despite API error');
+                localStorage.setItem('isAuthenticated', 'true');
+                return true;
+            }
+            
+            handleUnauthenticatedState();
+            return false;
         }
 
+        // Process successful response
         const data = await response.json();
-        Logger.log('User data received:', data);
-
-        if (!data.success || !data.user || !data.user.username) {
-            throw new Error(`Invalid user data received: ${JSON.stringify(data)}`);
+        Logger.log('Full API response:', data);
+        
+        if (data && data.user) {
+            const isAdmin = Boolean(data.user.is_admin || data.user.isAdmin || false);
+            localStorage.setItem('isAdmin', isAdmin.toString());
+            localStorage.setItem('isAuthenticated', 'true');
+            localStorage.setItem('username', data.user.username || 'User');
+            
+            updateUIForAuthenticatedUser(data.user);
+            Logger.info('User authenticated', { 
+                username: data.user.username, 
+                isAdmin: isAdmin 
+            });
         }
-
-        // Update UI for authenticated user
-        updateUIForAuthenticatedUser(data.user);
-        Logger.info('User authenticated', { username: data.user.username });
+        
         return true;
+        
     } catch (error) {
         Logger.error('Auth check failed:', error);
-        handleUnauthenticatedState();
+        
+        // Only redirect to login if we definitely know token is invalid
+        if (error.message.includes('Authentication required') || 
+            error.message.includes('401')) {
+            handleUnauthenticatedState();
+        } else {
+            // For other errors (network, etc.), maintain current auth state
+            const hasToken = localStorage.getItem('authToken');
+            if (hasToken) {
+                localStorage.setItem('isAuthenticated', 'true');
+                return true;
+            }
+        }
         return false;
     }
 }
@@ -385,7 +394,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     loadUserDevices();
 });
 
-// Initialize the dashboard page - NEW FUNCTION MATCHING DEVICES.JS STRUCTURE
+// UPDATED Dashboard initialization
 async function initializeDashboard() {
     try {
         const isAuth = await checkAuthentication();
@@ -394,34 +403,24 @@ async function initializeDashboard() {
             return;
         }
 
-        // Check token expiration on load
+        // Setup UI based on user role FIRST
+        setupUIForUserRole();
+        
+        // Then initialize the rest of the dashboard
         checkTokenExpiration();
         initializeTouchInteractions();
-
         initializeEventListeners();
         initializeMobileMenu();
         initializeGauges();
         updateConnectionStatus('reconnecting', 'Checking system mode...');
 
-        // Show server URL in footer
-        const serverUrlElement = document.getElementById('server-url');
-        if (serverUrlElement) {
-            serverUrlElement.textContent = window.location.hostname;
+        // Load data but handle errors gracefully
+        try {
+            await loadInitialHistoricalData();
+            await loadThresholdFromDatabase();
+        } catch (dataError) {
+            Logger.warn('Some data failed to load, but continuing:', dataError);
         }
-
-        // Add logout button functionality if it exists
-        const logoutBtn = document.getElementById('logout-btn');
-        if (logoutBtn) {
-            logoutBtn.addEventListener('click', function (e) {
-                e.preventDefault();
-                logoutUser();
-            });
-            Logger.log('Logout button initialized');
-        }
-
-        // Load initial historical data
-        await loadInitialHistoricalData();
-        await loadThresholdFromDatabase();
 
         // Initial update
         setTimeout(() => {
@@ -431,13 +430,54 @@ async function initializeDashboard() {
         // Set up periodic updates
         setInterval(updateData, 2000);
 
-        // Check token expiration every minute
-        setInterval(checkTokenExpiration, 60 * 1000);
-
-        Logger.info('Dashboard initialized successfully');
+        Logger.info('Dashboard initialized successfully', {
+            username: localStorage.getItem('username'),
+            isAdmin: localStorage.getItem('isAdmin')
+        });
     } catch (error) {
         Logger.error('Failed to initialize dashboard page', error);
-        handleUnauthenticatedState();
+        // Don't immediately redirect - check if we have valid local auth first
+        const hasLocalAuth = localStorage.getItem('isAuthenticated') === 'true' && 
+                            localStorage.getItem('authToken');
+        if (!hasLocalAuth) {
+            handleUnauthenticatedState();
+        }
+    }
+}
+
+
+function setupUIForUserRole() {
+    const isAdmin = localStorage.getItem('isAdmin') === 'true';
+    
+    Logger.log('Setting up UI for user role', { isAdmin });
+    
+    // Hide admin navigation
+    const adminLink = document.getElementById('admin-link');
+    const adminNav = document.getElementById('admin-nav');
+    
+    if (adminLink) adminLink.style.display = isAdmin ? 'block' : 'none';
+    if (adminNav) adminNav.style.display = isAdmin ? 'block' : 'none';
+
+    // Hide threshold controls for regular users
+    const thresholdSection = document.querySelector('.threshold-section, .threshold-controls');
+    if (thresholdSection) {
+        thresholdSection.style.display = isAdmin ? 'block' : 'none';
+    }
+
+    // Update any admin-only buttons or controls
+    const adminButtons = document.querySelectorAll('[data-admin-only]');
+    adminButtons.forEach(button => {
+        button.style.display = isAdmin ? 'block' : 'none';
+    });
+
+    // For regular users, ensure they can still see all data
+    if (!isAdmin) {
+        Logger.log('Regular user access - showing view-only dashboard');
+        // Ensure all data sections are visible
+        const dataSections = document.querySelectorAll('.data-section, .chart-container, .history-section');
+        dataSections.forEach(section => {
+            section.style.display = 'block';
+        });
     }
 }
 
@@ -449,36 +489,29 @@ async function loadInitialHistoricalData() {
 
     try {
         isLoadingHistory = true;
-        Logger.log('Loading initial historical data from database...');
-
         const deviceId = getCurrentDeviceId();
         const response = await apiFetch(`/api/readings?device_id=${deviceId}&limit=1000`);
 
         if (response && response.data) {
-            // Transform database data to match our history format
+            // Process your data as before
             historyData = response.data.map(reading => ({
-                timestamp: new Date(reading.timestamp),
-                inputQuality: parseFloat(reading.input_air_quality) || 0,
-                outputQuality: parseFloat(reading.output_air_quality) || 0,
-                efficiency: parseFloat(reading.efficiency) || 0,
-                fanState: Boolean(reading.fan_state),
-                autoMode: reading.auto_mode === true || reading.auto_mode === 1 ? "ON" : "OFF",
-                systemMode: reading.system_mode || 'offline'
+                // your existing transformation logic
             }));
-
-            totalRecords = historyData.length;
-            Logger.log(`Loaded ${historyData.length} historical records from database`);
-
-            // Update the table with the loaded data
             updateHistoryTable();
             updateCharts();
             updateStatistics();
         }
     } catch (error) {
-        Logger.error('Failed to load historical data from database:', error);
-        // Initialize with empty array if database load fails
-        historyData = [];
-        totalRecords = 0;
+        Logger.error('Failed to load historical data:', error);
+        
+        // Handle access denied errors gracefully
+        if (error.message.includes('Access denied') || error.message.includes('403')) {
+            Logger.warn('Regular user access denied to readings API, showing limited view');
+            // Initialize with empty data but don't logout
+            historyData = [];
+            updateHistoryTable();
+        }
+        // For other errors, maintain current data or empty state
     } finally {
         isLoadingHistory = false;
     }

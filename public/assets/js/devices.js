@@ -14,21 +14,32 @@ document.addEventListener('DOMContentLoaded', function () {
 // In your devices page JavaScript
 document.addEventListener('DOMContentLoaded', async function() {
     try {
-        await checkAuthentication();
+        const isAuthenticated = await checkAuthentication();
         
-        // Instead of protectRoute, check if user is authenticated
-        const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
         if (!isAuthenticated) {
+            Logger.warn('User not authenticated, redirecting to login');
             handleUnauthenticatedState();
             return;
         }
         
         // Load devices and setup UI based on admin status
-        loadUserDevices();
+        await loadUserDevices();
         setupUIForUserRole();
+        
+        Logger.info('Devices page initialized successfully', {
+            username: localStorage.getItem('username'),
+            isAdmin: localStorage.getItem('isAdmin'),
+            isAuthenticated: localStorage.getItem('isAuthenticated')
+        });
         
     } catch (error) {
         Logger.error('Page initialization failed:', error);
+        // Don't immediately redirect - check if we have valid local auth first
+        const hasLocalAuth = localStorage.getItem('isAuthenticated') === 'true' && 
+                            localStorage.getItem('authToken');
+        if (!hasLocalAuth) {
+            handleUnauthenticatedState();
+        }
     }
 });
 
@@ -41,11 +52,7 @@ function setupUIForUserRole() {
     
     if (adminLink) adminLink.style.display = isAdmin ? 'block' : 'none';
     if (adminNav) adminNav.style.display = isAdmin ? 'block' : 'none';
-    
-    // Hide add device form for regular users
-    hideAddDeviceFormForRegularUsers();
-    
-    // Setup navigation guard for admin pages
+
     setupNavigationGuard();
 }
 
@@ -67,9 +74,8 @@ async function initializeDevicesPage() {
     try {
         await checkAuthentication();
         await loadUserDevices();
-        hideAddDeviceFormForRegularUsers();
         
-        // Set up event listeners ONLY for admin users
+        // Set up event listeners based on user role
         const isAdmin = localStorage.getItem('isAdmin') === 'true';
         
         const logoutBtn = document.getElementById('logout-btn');
@@ -82,8 +88,17 @@ async function initializeDevicesPage() {
         
         // ONLY allow admins to add devices
         const addDeviceForm = document.getElementById('add-device-form');
-        if (addDeviceForm && isAdmin) {
-            addDeviceForm.addEventListener('submit', addNewDevice);
+        if (addDeviceForm) {
+            if (isAdmin) {
+                addDeviceForm.addEventListener('submit', addNewDevice);
+                Logger.log('Add device form enabled for admin user');
+            } else {
+                // Remove the form entirely for regular users
+                const addDeviceCard = addDeviceForm.closest('.card');
+                if (addDeviceCard) {
+                    addDeviceCard.style.display = 'none';
+                }
+            }
         }
         
         // Initialize modal listeners
@@ -153,7 +168,7 @@ function getBaseURL() {
     return `${protocol}//${hostname}${port ? ':' + port : ''}`;
 }
 
-// Enhanced fetch with error handling (updated to match reference auth pattern)
+// Enhanced fetch with error handling
 async function apiFetch(endpoint, options = {}) {
     const baseURL = getBaseURL();
     const token = localStorage.getItem('authToken');
@@ -172,7 +187,6 @@ async function apiFetch(endpoint, options = {}) {
             credentials: 'include'
         };
 
-        // Add Authorization header if we have a token - FIXED
         if (token) {
             defaultOptions.headers['Authorization'] = `Bearer ${token}`;
             Logger.log('Adding Authorization header with Bearer token');
@@ -193,10 +207,23 @@ async function apiFetch(endpoint, options = {}) {
             statusText: response.statusText
         });
 
+        // Handle 401 - Authentication required
         if (response.status === 401) {
             Logger.warn('Authentication failed, redirecting to login');
             handleUnauthenticatedState();
             throw new Error('Authentication required');
+        }
+
+        // Handle 403 - Authorization failed (user authenticated but no permissions)
+        if (response.status === 403) {
+            Logger.warn('Authorization failed - user lacks permissions', {
+                endpoint,
+                user: localStorage.getItem('username'),
+                isAdmin: localStorage.getItem('isAdmin')
+            });
+            
+            // Don't logout for 403 errors - just throw a specific error
+            throw new Error('Access denied: You do not have permission to access this resource');
         }
 
         if (!response.ok) {
@@ -252,38 +279,83 @@ async function checkAuthentication() {
             credentials: 'include'
         });
 
+        // Handle 401 - Authentication failed
         if (response.status === 401) {
-            Logger.warn('User not authenticated');
+            Logger.warn('User not authenticated - token invalid');
             handleUnauthenticatedState();
             return false;
         }
 
+        // Handle other non-200 responses
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // Don't logout for other errors, just log and continue
+            Logger.warn('User endpoint returned non-200 status', {
+                status: response.status,
+                statusText: response.statusText
+            });
+            
+            // For regular users, we might not have access to /api/user
+            // Check if we have a valid token and proceed
+            if (token) {
+                Logger.log('Proceeding with stored token despite API error');
+                localStorage.setItem('isAuthenticated', 'true');
+                return true;
+            }
+            
+            handleUnauthenticatedState();
+            return false;
         }
 
-        const data = await response.json();
-        
-        if (!data.success || !data.user) {
-            throw new Error('Invalid user data received');
+        // Try to parse successful response
+        try {
+            const data = await response.json();
+            Logger.log('Full API response:', data);
+            
+            if (data && data.user) {
+                // FIX: Handle undefined isAdmin safely with proper fallback
+                const isAdmin = Boolean(data.user.is_admin || data.user.isAdmin || false);
+                localStorage.setItem('isAdmin', isAdmin.toString());
+                localStorage.setItem('isAuthenticated', 'true');
+                localStorage.setItem('username', data.user.username || 'User');
+                
+                // Log the conversion for debugging
+                Logger.info('Admin status processed', { 
+                    originalIsAdmin: data.user.is_admin || data.user.isAdmin,
+                    convertedIsAdmin: isAdmin 
+                });
+                
+                updateUIForAuthenticatedUser(data.user);
+                Logger.info('User authenticated', { 
+                    username: data.user.username, 
+                    isAdmin: isAdmin 
+                });
+            } else {
+                // If no user data but response was OK, still consider authenticated
+                Logger.log('No user data in response, but authentication successful');
+                localStorage.setItem('isAuthenticated', 'true');
+            }
+            
+            return true;
+            
+        } catch (parseError) {
+            Logger.error('Failed to parse user response', parseError);
+            // If we have a token but parsing failed, still consider authenticated
+            if (token) {
+                localStorage.setItem('isAuthenticated', 'true');
+                return true;
+            }
+            throw parseError;
         }
-
-        // Update both authentication and admin status
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('isAdmin', data.user.isAdmin ? 'true' : 'false');
-        localStorage.setItem('username', data.user.username || 'User');
-        
-        updateUIForAuthenticatedUser(data.user);
-        Logger.info('User authenticated', { 
-            username: data.user.username, 
-            isAdmin: data.user.isAdmin 
-        });
-        
-        return true;
         
     } catch (error) {
         Logger.error('Auth check failed:', error);
-        handleUnauthenticatedState();
+        
+        // Only redirect to login if we definitely know token is invalid
+        // For network errors, etc., keep the current auth state
+        if (error.message.includes('Authentication required') || 
+            error.message.includes('401')) {
+            handleUnauthenticatedState();
+        }
         return false;
     }
 }
@@ -332,7 +404,6 @@ async function loadUserDevices() {
                 ...apiDevice,
                 username: localDevice?.username || apiDevice.device_username,
                 password: localDevice?.password || apiDevice.password || apiDevice.device_password,
-                // Add view-only flag for regular users
                 can_edit: localStorage.getItem('isAdmin') === 'true'
             };
         });
@@ -340,33 +411,77 @@ async function loadUserDevices() {
         Logger.log('Devices loaded from API', { count: mergedDevices.length });
 
         if (mergedDevices.length === 0) {
-            Logger.info('No devices found, showing welcome message');
             showWelcomeMessage();
         } else {
-            Logger.info('Displaying devices', { count: mergedDevices.length });
             displayDevices(mergedDevices);
         }
     } catch (error) {
-        Logger.error('Error loading devices from API, falling back to localStorage', error);
-        
-        // Fallback to localStorage if API fails
-        const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
-        // Add view-only flag for regular users in fallback
-        const devicesWithPermissions = localDevices.map(device => ({
-            ...device,
-            can_edit: localStorage.getItem('isAdmin') === 'true'
-        }));
-        
-        Logger.log('LocalStorage devices', { count: devicesWithPermissions.length });
-        
-        if (devicesWithPermissions.length === 0) {
-            Logger.info('No devices in localStorage, showing welcome message');
-            showWelcomeMessage();
+        // Handle 403 errors specifically for regular users
+        if (error.message.includes('Access denied') || error.message.includes('403')) {
+            Logger.warn('Regular user access denied to devices API, showing limited view');
+            
+            // Fallback to localStorage only for regular users
+            const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
+            const devicesWithPermissions = localDevices.map(device => ({
+                ...device,
+                can_edit: false // Regular users can't edit
+            }));
+            
+            if (devicesWithPermissions.length === 0) {
+                showRegularUserWelcomeMessage();
+            } else {
+                displayDevices(devicesWithPermissions);
+            }
+        } else if (error.message.includes('401')) {
+            // Authentication error - redirect to login
+            Logger.error('Authentication failed in device loading');
+            handleUnauthenticatedState();
         } else {
-            Logger.info('Displaying devices from localStorage', { count: devicesWithPermissions.length });
-            displayDevices(devicesWithPermissions);
+            Logger.error('Error loading devices from API, falling back to localStorage', error);
+            
+            // Fallback to localStorage for other errors
+            const localDevices = JSON.parse(localStorage.getItem('userDevices')) || [];
+            const devicesWithPermissions = localDevices.map(device => ({
+                ...device,
+                can_edit: localStorage.getItem('isAdmin') === 'true'
+            }));
+            
+            if (devicesWithPermissions.length === 0) {
+                showWelcomeMessage();
+            } else {
+                displayDevices(devicesWithPermissions);
+            }
         }
     }
+}
+
+function showRegularUserWelcomeMessage() {
+    Logger.log('Showing regular user welcome message');
+
+    const devicesList = document.getElementById('devices-list');
+    devicesList.innerHTML = `
+        <div class="welcome-message">
+            <div class="welcome-icon">
+                <i class="fas fa-wind fa-3x"></i>
+            </div>
+            <h3>Welcome to Air Purifier Control!</h3>
+            <p>No devices have been shared with you yet. Please contact an administrator to get access to devices.</p>
+            <div class="welcome-features">
+                <div class="feature">
+                    <i class="fas fa-tachometer-alt"></i>
+                    <span>Real-time monitoring</span>
+                </div>
+                <div class="feature">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Historical data</span>
+                </div>
+                <div class="feature">
+                    <i class="fas fa-cog"></i>
+                    <span>Remote control</span>
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 
@@ -586,10 +701,33 @@ function displayDevices(devices) {
 // Add this function call in your initializeDevicesPage function
 function hideAddDeviceFormForRegularUsers() {
     const isAdmin = localStorage.getItem('isAdmin') === 'true';
-    const addDeviceCard = document.querySelector('.card:last-child'); // The add device form card
     
-    if (!isAdmin && addDeviceCard) {
-        addDeviceCard.style.display = 'none';
+    // More specific selector for the add device form card
+    const addDeviceCard = document.querySelector('.card:has(#add-device-form)');
+    
+    // Alternative selectors if the above doesn't work
+    const cards = document.querySelectorAll('.card');
+    let addDeviceCardAlt = null;
+    
+    // Find the card that contains the add device form
+    cards.forEach(card => {
+        if (card.querySelector('#add-device-form')) {
+            addDeviceCardAlt = card;
+        }
+    });
+    
+    const targetCard = addDeviceCard || addDeviceCardAlt;
+    
+    if (targetCard) {
+        if (!isAdmin) {
+            Logger.log('Hiding add device form for regular user');
+            targetCard.style.display = 'none';
+        } else {
+            Logger.log('Showing add device form for admin user');
+            targetCard.style.display = 'block'; // Ensure it's visible for admins
+        }
+    } else {
+        Logger.warn('Add device form card not found');
     }
 }
 

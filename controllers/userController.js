@@ -18,6 +18,12 @@ exports.getUsers = (req, res) => {
           return res.status(500).json({ error: err.message });
         }
         
+        
+        const usersWithBooleans = rows.map(user => ({
+          ...user,
+          is_admin: Boolean(user.is_admin) 
+        }));
+        
         // Get total count for pagination
         db.get('SELECT COUNT(*) as total FROM users', (err, countResult) => {
           if (err) {
@@ -26,7 +32,7 @@ exports.getUsers = (req, res) => {
           }
           
           res.json({
-            users: rows,
+            users: usersWithBooleans, // Use the converted array
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
